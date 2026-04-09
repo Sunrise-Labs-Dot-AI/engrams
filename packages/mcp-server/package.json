@@ -44,6 +44,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.86.1",
     "@huggingface/transformers": "^3.4.2",
+    "@libsql/client": "^0.17.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.8.0",
     "drizzle-orm": "^0.45.2",

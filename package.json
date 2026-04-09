@@ -19,5 +19,9 @@
       "protobufjs",
       "sqlite-vec"
     ]
+  },
+  "dependencies": {
+    "@clerk/nextjs": "^7.0.12",
+    "@libsql/client": "^0.17.2"
   }
 }

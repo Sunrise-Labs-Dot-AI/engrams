@@ -93,6 +93,41 @@ function runMigrations(sqlite: Database.Database): void {
     sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_memories_entity_name ON memories(entity_name) WHERE deleted_at IS NULL`);
   });
 
+  runMigration(sqlite, "add_updated_at", () => {
+    sqlite.exec(`ALTER TABLE memories ADD COLUMN updated_at TEXT`);
+    sqlite.exec(`UPDATE memories SET updated_at = COALESCE(confirmed_at, learned_at, datetime('now')) WHERE updated_at IS NULL`);
+    sqlite.exec(`ALTER TABLE memory_connections ADD COLUMN updated_at TEXT`);
+    sqlite.exec(`UPDATE memory_connections SET updated_at = datetime('now') WHERE updated_at IS NULL`);
+
+    // Auto-set updated_at on every insert/update
+    sqlite.exec(`
+      CREATE TRIGGER IF NOT EXISTS memories_updated_at_insert
+      AFTER INSERT ON memories
+      BEGIN
+        UPDATE memories SET updated_at = datetime('now') WHERE id = NEW.id AND updated_at IS NULL;
+      END;
+    `);
+    sqlite.exec(`
+      CREATE TRIGGER IF NOT EXISTS memories_updated_at_update
+      AFTER UPDATE ON memories
+      WHEN NEW.updated_at IS OLD.updated_at OR NEW.updated_at IS NULL
+      BEGIN
+        UPDATE memories SET updated_at = datetime('now') WHERE id = NEW.id;
+      END;
+    `);
+    sqlite.exec(`
+      CREATE TRIGGER IF NOT EXISTS connections_updated_at_insert
+      AFTER INSERT ON memory_connections
+      BEGIN
+        UPDATE memory_connections SET updated_at = datetime('now')
+        WHERE source_memory_id = NEW.source_memory_id
+          AND target_memory_id = NEW.target_memory_id
+          AND relationship = NEW.relationship
+          AND updated_at IS NULL;
+      END;
+    `);
+  });
+
   runMigration(sqlite, "fts_add_entity_name", () => {
     // Drop old FTS table and triggers, then recreate with entity_name column
     sqlite.exec(`DROP TRIGGER IF EXISTS memory_fts_insert`);

@@ -26,8 +26,11 @@ import {
   redactSensitiveData,
   extractEntity,
   applyConfidenceDecay,
+  deriveKeys,
+  loadCredentials,
+  sync,
 } from "@engrams/core";
-import type { SourceType, Relationship, EntityType } from "@engrams/core";
+import type { SourceType, Relationship, EntityType, EncryptionKeys } from "@engrams/core";
 
 function generateId(): string {
   return randomBytes(16).toString("hex");
@@ -1472,6 +1475,57 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
       });
     },
   );
+
+  // --- Cloud Sync ---
+
+  // Cache derived keys in memory for auto-sync after first manual sync
+  let cachedSyncKeys: EncryptionKeys | null = null;
+
+  server.tool(
+    "memory_sync",
+    "Sync memories with cloud. Requires Pro tier setup (passphrase + Turso credentials in ~/.engrams/credentials.json). Push local changes and pull remote changes.",
+    {
+      passphrase: z.string().describe("Your encryption passphrase. Required on first sync or after restart."),
+    },
+    async (params) => {
+      const creds = loadCredentials();
+      if (!creds?.tursoUrl || !creds?.tursoAuthToken) {
+        return textResult({ error: "Cloud sync not configured. Set tursoUrl and tursoAuthToken in ~/.engrams/credentials.json or via the dashboard settings." });
+      }
+
+      const salt = Buffer.from(creds.salt, "base64");
+      const keys = deriveKeys(params.passphrase, salt);
+      cachedSyncKeys = keys;
+
+      const result = await sync(sqlite, {
+        tursoUrl: creds.tursoUrl,
+        tursoAuthToken: creds.tursoAuthToken,
+        keys,
+      }, creds.deviceId);
+
+      bumpLastModified(sqlite);
+      return textResult({ status: "synced", ...result });
+    },
+  );
+
+  // Optional auto-sync (if Turso is configured)
+  const syncCreds = loadCredentials();
+  if (syncCreds?.tursoUrl && syncCreds?.tursoAuthToken) {
+    const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+    setInterval(async () => {
+      if (!cachedSyncKeys) return; // Can't sync until passphrase is provided
+      try {
+        await sync(sqlite, {
+          tursoUrl: syncCreds.tursoUrl!,
+          tursoAuthToken: syncCreds.tursoAuthToken!,
+          keys: cachedSyncKeys,
+        }, syncCreds.deviceId);
+      } catch {
+        // Silent failure — sync is best-effort
+      }
+    }, SYNC_INTERVAL);
+  }
 
   // --- Resources ---
 

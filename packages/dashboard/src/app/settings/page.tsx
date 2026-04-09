@@ -4,12 +4,15 @@ import { getDbStats } from "@/lib/db";
 import { formatBytes } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { SettingsActions } from "./actions";
+import { SyncSettings } from "./sync-settings";
+import { getSyncStatus } from "./sync-actions";
 
 export const dynamic = "force-dynamic";
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
   const stats = getDbStats();
   const dbPath = resolve(homedir(), ".engrams", "engrams.db");
+  const syncStatus = await getSyncStatus();
 
   return (
     <div className="space-y-6">
@@ -38,6 +41,8 @@ export default function SettingsPage() {
           </div>
         </div>
       </Card>
+
+      <SyncSettings syncStatus={syncStatus} />
 
       <SettingsActions />
     </div>

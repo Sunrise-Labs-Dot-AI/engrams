@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { ClerkProvider } from "@clerk/nextjs";
 import { Nav } from "@/components/nav";
 import "@/globals.css";
 
@@ -7,12 +8,14 @@ export const metadata: Metadata = {
   description: "AI memory dashboard",
 };
 
+const isHosted = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return (
+  const content = (
     <html lang="en" className="dark">
       <body className="min-h-screen">
         <header className="border-b border-[var(--color-border)] bg-[var(--color-card)]">
@@ -29,4 +32,6 @@ export default function RootLayout({
       </body>
     </html>
   );
+
+  return isHosted ? <ClerkProvider>{content}</ClerkProvider> : content;
 }

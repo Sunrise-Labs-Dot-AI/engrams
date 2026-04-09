@@ -24,6 +24,7 @@ export const memories = sqliteTable("memories", {
   entityType: text("entity_type"),
   entityName: text("entity_name"),
   structuredData: text("structured_data"),
+  updatedAt: text("updated_at"),
 });
 
 export const memoryConnections = sqliteTable("memory_connections", {
@@ -34,6 +35,7 @@ export const memoryConnections = sqliteTable("memory_connections", {
     .notNull()
     .references(() => memories.id),
   relationship: text("relationship").notNull(),
+  updatedAt: text("updated_at"),
 });
 
 export const memoryEvents = sqliteTable("memory_events", {
