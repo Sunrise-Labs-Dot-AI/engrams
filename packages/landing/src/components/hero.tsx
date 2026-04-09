@@ -55,6 +55,19 @@ export function Hero() {
             Add to Claude Code, Cursor, Windsurf, or any MCP client. That&rsquo;s it.
           </p>
         </div>
+
+        {/* Dashboard screenshot */}
+        <div className="mt-16 max-w-5xl mx-auto perspective-container">
+          <div className="screenshot-frame">
+            <img
+              src="/screenshots/dashboard-hero.png"
+              alt="Engrams dashboard showing memory browser with search, domain filters, and confidence scores"
+              width={1440}
+              height={900}
+              className="rounded-lg w-full h-auto"
+            />
+          </div>
+        </div>
       </div>
     </section>
   );

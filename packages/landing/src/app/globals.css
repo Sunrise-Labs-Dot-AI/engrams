@@ -191,3 +191,28 @@ body {
   stroke-dasharray: 8 4;
   animation: dash-flow 2s linear infinite;
 }
+
+/* Hero screenshot perspective */
+.perspective-container {
+  perspective: 1200px;
+}
+
+.screenshot-frame {
+  transform: rotateX(4deg) rotateY(-2deg);
+  border: 1px solid var(--color-border-hover);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow:
+    0 25px 50px rgba(0, 0, 0, 0.5),
+    0 0 60px rgba(125, 211, 252, 0.1),
+    0 0 120px rgba(125, 211, 252, 0.04);
+  transition: transform 400ms ease, box-shadow 400ms ease;
+}
+
+.screenshot-frame:hover {
+  transform: rotateX(1deg) rotateY(-0.5deg);
+  box-shadow:
+    0 25px 50px rgba(0, 0, 0, 0.5),
+    0 0 80px rgba(125, 211, 252, 0.15),
+    0 0 160px rgba(125, 211, 252, 0.06);
+}
