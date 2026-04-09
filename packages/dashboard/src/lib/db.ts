@@ -74,10 +74,46 @@ export interface PermissionRow {
 
 export function getMemories(opts?: {
   domain?: string;
-  sortBy?: "confidence" | "recency";
+  sortBy?: "confidence" | "recency" | "used" | "learned";
   search?: string;
+  sourceType?: string;
+  minConfidence?: number;
+  maxConfidence?: number;
+  unused?: boolean;
 }): MemoryRow[] {
   const db = getReadDb();
+
+  function applyFilters(q: string, params: unknown[]): { q: string; params: unknown[] } {
+    if (opts?.domain) {
+      q += ` AND domain = ?`;
+      params.push(opts.domain);
+    }
+    if (opts?.sourceType) {
+      q += ` AND source_type = ?`;
+      params.push(opts.sourceType);
+    }
+    if (opts?.minConfidence !== undefined) {
+      q += ` AND confidence >= ?`;
+      params.push(opts.minConfidence);
+    }
+    if (opts?.maxConfidence !== undefined) {
+      q += ` AND confidence <= ?`;
+      params.push(opts.maxConfidence);
+    }
+    if (opts?.unused) {
+      q += ` AND used_count = 0`;
+    }
+    return { q, params };
+  }
+
+  function applySort(q: string): string {
+    switch (opts?.sortBy) {
+      case "recency": return q + ` ORDER BY learned_at DESC`;
+      case "used": return q + ` ORDER BY used_count DESC, confidence DESC`;
+      case "learned": return q + ` ORDER BY learned_at ASC`;
+      default: return q + ` ORDER BY confidence DESC`;
+    }
+  }
 
   if (opts?.search) {
     const ftsRows = db
@@ -91,31 +127,25 @@ export function getMemories(opts?: {
     const rowids = ftsRows.map((r) => r.rowid);
     const placeholders = rowids.map(() => "?").join(",");
     let q = `SELECT * FROM memories WHERE rowid IN (${placeholders}) AND deleted_at IS NULL`;
-    const params: unknown[] = [...rowids];
-
-    if (opts.domain) {
-      q += ` AND domain = ?`;
-      params.push(opts.domain);
-    }
-
-    q += ` ORDER BY confidence DESC`;
+    let params: unknown[] = [...rowids];
+    ({ q, params } = applyFilters(q, params));
+    q = applySort(q);
     return db.prepare(q).all(...params) as MemoryRow[];
   }
 
   let q = `SELECT * FROM memories WHERE deleted_at IS NULL`;
-  const params: unknown[] = [];
-
-  if (opts?.domain) {
-    q += ` AND domain = ?`;
-    params.push(opts.domain);
-  }
-
-  q +=
-    opts?.sortBy === "recency"
-      ? ` ORDER BY learned_at DESC`
-      : ` ORDER BY confidence DESC`;
-
+  let params: unknown[] = [];
+  ({ q, params } = applyFilters(q, params));
+  q = applySort(q);
   return db.prepare(q).all(...params) as MemoryRow[];
+}
+
+export function getSourceTypes(): string[] {
+  const db = getReadDb();
+  const rows = db
+    .prepare(`SELECT DISTINCT source_type FROM memories WHERE deleted_at IS NULL ORDER BY source_type`)
+    .all() as { source_type: string }[];
+  return rows.map((r) => r.source_type);
 }
 
 export function getMemoryById(id: string): MemoryRow | undefined {

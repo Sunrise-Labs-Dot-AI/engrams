@@ -1,22 +1,43 @@
 import { Suspense } from "react";
-import { getMemories, getDomains } from "@/lib/db";
+import { getMemories, getDomains, getSourceTypes } from "@/lib/db";
 import { MemoryList } from "@/components/memory-list";
 import { SearchBar } from "@/components/search-bar";
 import { DomainFilter } from "@/components/domain-filter";
+import { MemoryFilters } from "@/components/memory-filters";
 
 export const dynamic = "force-dynamic";
 
 interface PageProps {
-  searchParams: Promise<{ q?: string; domain?: string; sort?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    domain?: string;
+    sort?: string;
+    source?: string;
+    minConf?: string;
+    maxConf?: string;
+    unused?: string;
+  }>;
 }
 
 export default async function HomePage({ searchParams }: PageProps) {
   const params = await searchParams;
   const domains = getDomains();
+  const sourceTypes = getSourceTypes();
+
+  const sortBy = (["confidence", "recency", "used", "learned"] as const).includes(
+    params.sort as "confidence" | "recency" | "used" | "learned",
+  )
+    ? (params.sort as "confidence" | "recency" | "used" | "learned")
+    : "confidence";
+
   const memories = getMemories({
     search: params.q,
     domain: params.domain,
-    sortBy: params.sort === "recency" ? "recency" : "confidence",
+    sortBy,
+    sourceType: params.source,
+    minConfidence: params.minConf ? parseFloat(params.minConf) : undefined,
+    maxConfidence: params.maxConf ? parseFloat(params.maxConf) : undefined,
+    unused: params.unused === "1",
   });
 
   return (
@@ -29,6 +50,10 @@ export default async function HomePage({ searchParams }: PageProps) {
           <DomainFilter domains={domains} />
         </Suspense>
       </div>
+
+      <Suspense>
+        <MemoryFilters sourceTypes={sourceTypes} />
+      </Suspense>
 
       <div className="flex items-center justify-between">
         <p className="text-xs text-[var(--color-text-muted)]">

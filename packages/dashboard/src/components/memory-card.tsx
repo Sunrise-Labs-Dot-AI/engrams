@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   CheckCircle,
-  AlertTriangle,
+  Pencil,
   Trash2,
   ChevronDown,
   ChevronUp,
@@ -15,7 +15,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ConfidenceBar } from "@/components/confidence-bar";
-import { confirmMemoryAction, flagMemoryAction, deleteMemoryAction } from "@/lib/actions";
+import { confirmMemoryAction, deleteMemoryAction } from "@/lib/actions";
 import { formatDate, sourceTypeLabel } from "@/lib/utils";
 import type { MemoryRow } from "@/lib/db";
 
@@ -99,15 +99,15 @@ export function MemoryCard({ memory: m }: MemoryCardProps) {
               <CheckCircle size={14} className="mr-1" />
               Confirm
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={loading}
-              onClick={() => handleAction(() => flagMemoryAction(m.id))}
-            >
-              <AlertTriangle size={14} className="mr-1" />
-              Flag
-            </Button>
+            <Link href={`/memory/${m.id}`}>
+              <Button
+                variant="ghost"
+                size="sm"
+              >
+                <Pencil size={14} className="mr-1" />
+                Correct
+              </Button>
+            </Link>
             <Button
               variant="ghost"
               size="sm"

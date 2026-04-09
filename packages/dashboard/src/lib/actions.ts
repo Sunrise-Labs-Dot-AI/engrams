@@ -8,7 +8,9 @@ import {
   splitMemoryById,
   clearAllMemories as clearAll,
   getMemoryById,
+  getMemories,
 } from "./db";
+import { analyzeCleanup, type CleanupSuggestion } from "./cleanup";
 import { revalidatePath } from "next/cache";
 import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync } from "fs";
@@ -170,3 +172,53 @@ export async function clearAllMemoriesAction() {
   clearAll();
   revalidatePath("/");
 }
+
+// --- Cleanup actions ---
+
+export async function analyzeCleanupAction(): Promise<
+  { suggestions: CleanupSuggestion[] } | { error: string }
+> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return {
+      error:
+        "API key required for cleanup analysis. Add ANTHROPIC_API_KEY to packages/dashboard/.env.local",
+    };
+  }
+
+  try {
+    const suggestions = await analyzeCleanup(apiKey);
+    return { suggestions };
+  } catch (e) {
+    console.error("[engrams] Cleanup analysis failed:", e);
+    return { error: "Cleanup analysis failed. Check your API key and try again." };
+  }
+}
+
+export async function applyMergeSuggestionAction(
+  keepId: string,
+  deleteIds: string[],
+): Promise<{ error?: string }> {
+  for (const id of deleteIds) {
+    if (id !== keepId) {
+      deleteMemoryById(id);
+    }
+  }
+  revalidatePath("/");
+  revalidatePath("/cleanup");
+  return {};
+}
+
+export async function applySplitSuggestionAction(
+  id: string,
+  parts: SplitPart[],
+): Promise<{ newIds: string[]; error?: string } | { error: string }> {
+  if (parts.length < 2) return { error: "Need at least 2 parts to split" };
+  const result = splitMemoryById(id, parts);
+  if (!result) return { error: "Memory not found" };
+  revalidatePath("/");
+  revalidatePath("/cleanup");
+  return result;
+}
+
+export { type CleanupSuggestion } from "./cleanup";
