@@ -12,6 +12,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { ConfidenceBar } from "@/components/confidence-bar";
 import { EventTimeline } from "@/components/event-timeline";
 import { ConnectionGraph } from "@/components/connection-graph";
+import { EditableMemory } from "@/components/editable-memory";
 import { MemoryActions } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -40,14 +41,7 @@ export default async function MemoryDetailPage({ params }: PageProps) {
 
       <Card className="p-6">
         <div className="space-y-4">
-          <div>
-            <p className="text-base leading-relaxed">{memory.content}</p>
-            {memory.detail && (
-              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
-                {memory.detail}
-              </p>
-            )}
-          </div>
+          <EditableMemory id={memory.id} content={memory.content} detail={memory.detail} />
 
           <div className="flex items-center gap-2 flex-wrap">
             <StatusBadge variant="accent">{memory.domain}</StatusBadge>

@@ -277,7 +277,7 @@ export function confirmMemoryById(id: string): { newConfidence: number } | null 
     .get(id) as { confidence: number; confirmed_count: number } | undefined;
   if (!existing) return null;
 
-  const newConfidence = Math.min(existing.confidence + 0.05, 0.99);
+  const newConfidence = 0.99;
   const timestamp = now();
   db.prepare(
     `UPDATE memories SET confidence = ?, confirmed_count = ?, confirmed_at = ? WHERE id = ?`,
