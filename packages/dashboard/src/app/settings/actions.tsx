@@ -6,7 +6,7 @@ import { Download, Moon, Sun, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
-import { clearAllMemories } from "@/lib/api";
+import { clearAllMemoriesAction } from "@/lib/actions";
 
 export function SettingsActions() {
   const router = useRouter();
@@ -34,7 +34,7 @@ export function SettingsActions() {
   async function handleClear() {
     setLoading(true);
     try {
-      await clearAllMemories();
+      await clearAllMemoriesAction();
       setClearModalOpen(false);
       router.refresh();
     } catch (e) {

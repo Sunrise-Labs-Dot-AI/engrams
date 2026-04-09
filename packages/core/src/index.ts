@@ -3,3 +3,7 @@ export * from "./types.js";
 export * from "./confidence.js";
 export * from "./db.js";
 export { setupFTS, searchFTS } from "./fts.js";
+export { generateEmbedding, generateEmbeddings, getEmbedder, backfillEmbeddings, EMBEDDING_DIM } from "./embeddings.js";
+export { setupVec, insertEmbedding, deleteEmbedding, searchVec } from "./vec.js";
+export { hybridSearch } from "./search.js";
+export type { SearchResult } from "./search.js";

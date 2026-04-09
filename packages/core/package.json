@@ -16,7 +16,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "drizzle-orm": "^0.45.2"
+    "@huggingface/transformers": "^3.4.2",
+    "drizzle-orm": "^0.45.2",
+    "sqlite-vec": "^0.1.6"
   },
   "peerDependencies": {
     "better-sqlite3": ">=11"

@@ -11,8 +11,8 @@ export function getInitialConfidence(sourceType: SourceType): number {
   return INITIAL_CONFIDENCE[sourceType] ?? 0.7;
 }
 
-export function applyConfirm(current: number): number {
-  return Math.min(current + 0.05, 0.99);
+export function applyConfirm(_current: number): number {
+  return 0.99;
 }
 
 export function applyCorrect(): number {

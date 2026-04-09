@@ -7,10 +7,11 @@ interface ModalProps {
   open: boolean;
   onClose: () => void;
   title: string;
+  size?: "sm" | "md" | "lg";
   children: ReactNode;
 }
 
-export function Modal({ open, onClose, title, children }: ModalProps) {
+export function Modal({ open, onClose, title, size = "md", children }: ModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -32,7 +33,12 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
         if (e.target === overlayRef.current) onClose();
       }}
     >
-      <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
+      <div className={clsx(
+        "bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-xl w-full mx-4 p-6 max-h-[85vh] overflow-y-auto",
+        size === "sm" && "max-w-sm",
+        size === "md" && "max-w-md",
+        size === "lg" && "max-w-xl",
+      )}>
         <h2 className="text-lg font-semibold mb-4">{title}</h2>
         {children}
       </div>

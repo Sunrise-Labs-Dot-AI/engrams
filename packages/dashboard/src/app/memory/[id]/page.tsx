@@ -103,7 +103,7 @@ export default async function MemoryDetailPage({ params }: PageProps) {
 
         <Card className="p-4">
           <h3 className="text-sm font-semibold mb-3">Actions</h3>
-          <MemoryActions id={memory.id} />
+          <MemoryActions id={memory.id} currentContent={memory.content} currentDetail={memory.detail} />
         </Card>
       </div>
 

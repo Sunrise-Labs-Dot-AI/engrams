@@ -5,6 +5,7 @@ import { homedir } from "os";
 import { mkdirSync, chmodSync } from "fs";
 import * as schema from "./schema.js";
 import { setupFTS } from "./fts.js";
+import { setupVec } from "./vec.js";
 
 export type EngramsDatabase = BetterSQLite3Database<typeof schema>;
 
@@ -56,7 +57,7 @@ const CREATE_TABLES_SQL = `
   );
 `;
 
-export function createDatabase(dbPath?: string): { db: EngramsDatabase; sqlite: Database.Database } {
+export function createDatabase(dbPath?: string): { db: EngramsDatabase; sqlite: Database.Database; vecAvailable: boolean } {
   const dir = resolve(homedir(), ".engrams");
   mkdirSync(dir, { recursive: true });
   const path = dbPath ?? resolve(dir, "engrams.db");
@@ -68,6 +69,13 @@ export function createDatabase(dbPath?: string): { db: EngramsDatabase; sqlite: 
   sqlite.exec(CREATE_TABLES_SQL);
   setupFTS(sqlite);
 
+  let vecAvailable = false;
+  try {
+    vecAvailable = setupVec(sqlite);
+  } catch {
+    // Defense-in-depth — setupVec has its own try/catch
+  }
+
   try {
     chmodSync(path, 0o600);
   } catch {
@@ -76,5 +84,5 @@ export function createDatabase(dbPath?: string): { db: EngramsDatabase; sqlite: 
 
   const db = drizzle(sqlite, { schema });
 
-  return { db, sqlite };
+  return { db, sqlite, vecAvailable };
 }

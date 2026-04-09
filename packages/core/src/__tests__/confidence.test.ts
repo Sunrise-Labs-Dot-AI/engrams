@@ -26,12 +26,9 @@ describe("getInitialConfidence", () => {
 });
 
 describe("applyConfirm", () => {
-  it("increases confidence by 0.05", () => {
-    expect(applyConfirm(0.7)).toBeCloseTo(0.75);
-  });
-
-  it("caps at 0.99", () => {
-    expect(applyConfirm(0.97)).toBe(0.99);
+  it("sets confidence to max (0.99)", () => {
+    expect(applyConfirm(0.7)).toBe(0.99);
+    expect(applyConfirm(0.5)).toBe(0.99);
     expect(applyConfirm(0.99)).toBe(0.99);
   });
 });

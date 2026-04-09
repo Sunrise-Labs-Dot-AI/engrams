@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { eq, and, isNull, desc, sql, gte } from "drizzle-orm";
 import { randomBytes } from "crypto";
+import Anthropic from "@anthropic-ai/sdk";
 import {
   createDatabase,
   searchFTS,
@@ -15,6 +16,11 @@ import {
   applyCorrect,
   applyMistake,
   applyUsed,
+  generateEmbedding,
+  insertEmbedding,
+  searchVec,
+  hybridSearch,
+  backfillEmbeddings,
 } from "@engrams/core";
 import type { SourceType, Relationship } from "@engrams/core";
 
@@ -38,7 +44,14 @@ export async function startServer() {
     version: "0.1.0",
   });
 
-  const { db, sqlite } = createDatabase();
+  const { db, sqlite, vecAvailable } = createDatabase();
+
+  // Backfill embeddings for existing memories (async, best-effort)
+  if (vecAvailable) {
+    backfillEmbeddings(sqlite).then((count) => {
+      if (count > 0) process.stderr.write(`[engrams] Backfilled embeddings for ${count} memories\n`);
+    }).catch(() => {})
+  }
 
   // --- Instructions Resource ---
 
@@ -102,26 +115,59 @@ Organize memories by life domain: general, work, health, finance, relationships,
       force: z.boolean().optional().describe("Skip duplicate detection and save anyway"),
     },
     async (params) => {
-      // --- Dedup check: search FTS5 for similar existing content ---
-      if (!params.force) {
-        const dedupResults = searchFTS(sqlite, params.content, 5);
-        if (dedupResults.length > 0) {
-          const rowids = dedupResults.map((r) => r.rowid);
-          const placeholders = rowids.map(() => "?").join(",");
-          const existing = sqlite
-            .prepare(
-              `SELECT * FROM memories WHERE rowid IN (${placeholders}) AND deleted_at IS NULL`,
-            )
-            .all(...rowids) as Record<string, unknown>[];
+      // --- Dedup check ---
+      let embedding: Float32Array | null = null;
 
-          if (existing.length > 0) {
-            return textResult({
-              duplicate_detected: true,
-              existing_memory: existing[0],
-              message:
-                "A similar memory already exists. Use memory_update to modify it, memory_confirm to reinforce it, or add force: true to save anyway.",
-              all_matches: existing.length,
-            });
+      if (!params.force) {
+        const embeddingText = params.content + (params.detail ? " " + params.detail : "");
+
+        if (vecAvailable) {
+          // Semantic dedup via cosine similarity
+          try {
+            embedding = await generateEmbedding(embeddingText);
+            const similar = searchVec(sqlite, embedding, 3);
+            const closeMatches = similar.filter((s) => s.distance < 0.3);
+            if (closeMatches.length > 0) {
+              const existing = sqlite
+                .prepare(`SELECT * FROM memories WHERE id = ? AND deleted_at IS NULL`)
+                .get(closeMatches[0].memory_id) as Record<string, unknown> | undefined;
+              if (existing) {
+                return textResult({
+                  duplicate_detected: true,
+                  existing_memory: existing,
+                  similarity: 1 - closeMatches[0].distance,
+                  message:
+                    "A semantically similar memory already exists. Use memory_update to modify it, memory_confirm to reinforce it, or add force: true to save anyway.",
+                  all_matches: closeMatches.length,
+                });
+              }
+            }
+          } catch {
+            // Vector dedup failed — fall through to FTS5 dedup
+          }
+        }
+
+        // FTS5 fallback dedup (when vec unavailable or vec found no match)
+        if (!vecAvailable) {
+          const dedupResults = searchFTS(sqlite, params.content, 5);
+          if (dedupResults.length > 0) {
+            const rowids = dedupResults.map((r) => r.rowid);
+            const placeholders = rowids.map(() => "?").join(",");
+            const existing = sqlite
+              .prepare(
+                `SELECT * FROM memories WHERE rowid IN (${placeholders}) AND deleted_at IS NULL`,
+              )
+              .all(...rowids) as Record<string, unknown>[];
+
+            if (existing.length > 0) {
+              return textResult({
+                duplicate_detected: true,
+                existing_memory: existing[0],
+                message:
+                  "A similar memory already exists. Use memory_update to modify it, memory_confirm to reinforce it, or add force: true to save anyway.",
+                all_matches: existing.length,
+              });
+            }
           }
         }
       }
@@ -145,6 +191,19 @@ Organize memories by life domain: general, work, health, finance, relationships,
         })
         .run();
 
+      // Store embedding (reuse from dedup or generate fresh)
+      if (vecAvailable) {
+        try {
+          if (!embedding) {
+            const embeddingText = params.content + (params.detail ? " " + params.detail : "");
+            embedding = await generateEmbedding(embeddingText);
+          }
+          insertEmbedding(sqlite, id, embedding);
+        } catch {
+          // Embedding failure is non-fatal — memory is saved without vector
+        }
+      }
+
       const eventId = generateId();
       db.insert(memoryEvents)
         .values({
@@ -158,7 +217,48 @@ Organize memories by life domain: general, work, health, finance, relationships,
         })
         .run();
 
-      return textResult({ id, confidence, domain: params.domain ?? "general", created: true });
+      // --- Proactive split detection ---
+      const fullText = params.content + (params.detail ? " " + params.detail : "");
+      const sentences = fullText.split(/(?<=[.!?])\s+/).filter((s) => s.length > 10);
+      let splitSuggestion: { should_split: boolean; parts?: { content: string; detail?: string }[] } | null = null;
+
+      if (sentences.length >= 3 && process.env.ANTHROPIC_API_KEY) {
+        try {
+          const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+          const resp = await client.messages.create({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 512,
+            messages: [
+              {
+                role: "user",
+                content: `Analyze this memory and determine if it contains multiple distinct topics that should be stored separately. Only suggest splitting if the topics are genuinely independent (would be searched for separately).
+
+Memory content: ${JSON.stringify(params.content)}
+Memory detail: ${JSON.stringify(params.detail ?? null)}
+
+Respond with ONLY valid JSON:
+- If it should NOT be split: {"should_split": false}
+- If it SHOULD be split: {"should_split": true, "parts": [{"content": "...", "detail": "..."}, ...]}
+
+Each part should have a concise "content" (one sentence) and optional "detail". Do not split if the content is a single coherent topic.`,
+              },
+            ],
+          });
+          const text = resp.content[0].type === "text" ? resp.content[0].text : "";
+          splitSuggestion = JSON.parse(text);
+        } catch {
+          // LLM call failed — skip split suggestion
+        }
+      }
+
+      const result: Record<string, unknown> = { id, confidence, domain: params.domain ?? "general", created: true };
+      if (splitSuggestion?.should_split && splitSuggestion.parts) {
+        result.split_suggested = true;
+        result.suggested_parts = splitSuggestion.parts;
+        result.message = "This memory appears to contain multiple distinct topics. Consider calling memory_split to separate them.";
+      }
+
+      return textResult(result);
     },
   );
 
@@ -173,53 +273,34 @@ Organize memories by life domain: general, work, health, finance, relationships,
     },
     async (params) => {
       const limit = params.limit ?? 20;
-      const ftsResults = searchFTS(sqlite, params.query, limit * 2);
 
-      if (ftsResults.length === 0) {
+      const searchResults = await hybridSearch(sqlite, params.query, {
+        domain: params.domain,
+        minConfidence: params.minConfidence,
+        limit,
+      });
+
+      const results = searchResults.map((r) => r.memory);
+
+      if (results.length === 0) {
         return textResult({ memories: [], count: 0 });
       }
 
-      const rowids = ftsResults.map((r) => r.rowid);
-      const placeholders = rowids.map(() => "?").join(",");
-
-      let query = `
-        SELECT m.* FROM memories m
-        WHERE m.rowid IN (${placeholders})
-          AND m.deleted_at IS NULL
-      `;
-      const queryParams: unknown[] = [...rowids];
-
-      if (params.domain) {
-        query += ` AND m.domain = ?`;
-        queryParams.push(params.domain);
-      }
-      if (params.minConfidence !== undefined) {
-        query += ` AND m.confidence >= ?`;
-        queryParams.push(params.minConfidence);
-      }
-
-      query += ` ORDER BY m.confidence DESC LIMIT ?`;
-      queryParams.push(limit);
-
-      const results = sqlite.prepare(query).all(...queryParams) as Record<string, unknown>[];
-
       // --- Auto-track usage: bump used_count and last_used_at on returned memories ---
-      if (results.length > 0) {
-        const timestamp = now();
-        const updateStmt = sqlite.prepare(
-          `UPDATE memories SET used_count = used_count + 1, last_used_at = ? WHERE id = ?`,
-        );
-        const insertEventStmt = sqlite.prepare(
-          `INSERT INTO memory_events (id, memory_id, event_type, timestamp) VALUES (?, ?, 'used', ?)`,
-        );
-        const batchUpdate = sqlite.transaction(() => {
-          for (const mem of results) {
-            updateStmt.run(timestamp, mem.id);
-            insertEventStmt.run(generateId(), mem.id, timestamp);
-          }
-        });
-        batchUpdate();
-      }
+      const timestamp = now();
+      const updateStmt = sqlite.prepare(
+        `UPDATE memories SET used_count = used_count + 1, last_used_at = ? WHERE id = ?`,
+      );
+      const insertEventStmt = sqlite.prepare(
+        `INSERT INTO memory_events (id, memory_id, event_type, timestamp) VALUES (?, ?, 'used', ?)`,
+      );
+      const batchUpdate = sqlite.transaction(() => {
+        for (const mem of results) {
+          updateStmt.run(timestamp, mem.id);
+          insertEventStmt.run(generateId(), mem.id, timestamp);
+        }
+      });
+      batchUpdate();
 
       return textResult({ memories: results, count: results.length });
     },
@@ -257,6 +338,18 @@ Organize memories by life domain: general, work, health, finance, relationships,
       }
 
       db.update(memories).set(updates).where(eq(memories.id, params.id)).run();
+
+      // Re-embed if content changed
+      if (params.content !== undefined && vecAvailable) {
+        try {
+          const detail = params.detail ?? existing.detail;
+          const embeddingText = params.content + (detail ? " " + detail : "");
+          const embedding = await generateEmbedding(embeddingText);
+          insertEmbedding(sqlite, params.id, embedding);
+        } catch {
+          // Non-fatal
+        }
+      }
 
       db.insert(memoryEvents)
         .values({
@@ -407,6 +500,16 @@ Organize memories by life domain: general, work, health, finance, relationships,
         .where(eq(memories.id, params.id))
         .run();
 
+      // Re-embed with corrected content
+      if (vecAvailable) {
+        try {
+          const embedding = await generateEmbedding(params.content);
+          insertEmbedding(sqlite, params.id, embedding);
+        } catch {
+          // Non-fatal
+        }
+      }
+
       db.insert(memoryEvents)
         .values({
           id: generateId(),
@@ -514,6 +617,122 @@ Organize memories by life domain: general, work, health, finance, relationships,
         sourceMemoryId: params.sourceMemoryId,
         targetMemoryId: params.targetMemoryId,
         relationship: params.relationship,
+      });
+    },
+  );
+
+  server.tool(
+    "memory_split",
+    "Split a memory that contains multiple distinct facts into separate memories. Call this when a memory covers more than one topic or would be more useful as individual pieces. Each new memory inherits the original's domain and source metadata, and the originals are connected with 'related' relationships.",
+    {
+      id: z.string().describe("Memory ID to split"),
+      parts: z
+        .array(
+          z.object({
+            content: z.string().describe("Content for this part"),
+            detail: z.string().optional().describe("Optional detail for this part"),
+            domain: z.string().optional().describe("Override domain for this part"),
+          }),
+        )
+        .min(2)
+        .describe("The separate memories to create from the original"),
+      agentId: z.string().optional().describe("Your agent ID"),
+      agentName: z.string().optional().describe("Your agent name"),
+    },
+    async (params) => {
+      const existing = db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.id, params.id), isNull(memories.deletedAt)))
+        .get();
+
+      if (!existing) {
+        return textResult({ error: "Memory not found or deleted" });
+      }
+
+      const timestamp = now();
+      const newIds: string[] = [];
+
+      // Create new memories from parts
+      for (const part of params.parts) {
+        const newId = generateId();
+        newIds.push(newId);
+
+        db.insert(memories)
+          .values({
+            id: newId,
+            content: part.content,
+            detail: part.detail ?? null,
+            domain: part.domain ?? existing.domain,
+            sourceAgentId: existing.sourceAgentId,
+            sourceAgentName: existing.sourceAgentName,
+            sourceType: existing.sourceType,
+            sourceDescription: existing.sourceDescription,
+            confidence: Math.min(existing.confidence + 0.05, 0.99),
+            learnedAt: timestamp,
+          })
+          .run();
+
+        // Embed the new memory
+        if (vecAvailable) {
+          try {
+            const embeddingText = part.content + (part.detail ? " " + part.detail : "");
+            const embedding = await generateEmbedding(embeddingText);
+            insertEmbedding(sqlite, newId, embedding);
+          } catch {
+            // Non-fatal
+          }
+        }
+
+        db.insert(memoryEvents)
+          .values({
+            id: generateId(),
+            memoryId: newId,
+            eventType: "created",
+            agentId: params.agentId ?? null,
+            agentName: params.agentName ?? null,
+            newValue: JSON.stringify({ content: part.content, splitFrom: params.id }),
+            timestamp,
+          })
+          .run();
+      }
+
+      // Connect all new memories to each other
+      for (let i = 0; i < newIds.length; i++) {
+        for (let j = i + 1; j < newIds.length; j++) {
+          db.insert(memoryConnections)
+            .values({
+              sourceMemoryId: newIds[i],
+              targetMemoryId: newIds[j],
+              relationship: "related",
+            })
+            .run();
+        }
+      }
+
+      // Soft-delete the original
+      db.update(memories)
+        .set({ deletedAt: timestamp })
+        .where(eq(memories.id, params.id))
+        .run();
+
+      db.insert(memoryEvents)
+        .values({
+          id: generateId(),
+          memoryId: params.id,
+          eventType: "removed",
+          agentId: params.agentId ?? null,
+          agentName: params.agentName ?? null,
+          newValue: JSON.stringify({ reason: "split", splitInto: newIds }),
+          timestamp,
+        })
+        .run();
+
+      return textResult({
+        split: true,
+        originalId: params.id,
+        newMemories: newIds,
+        count: newIds.length,
       });
     },
   );

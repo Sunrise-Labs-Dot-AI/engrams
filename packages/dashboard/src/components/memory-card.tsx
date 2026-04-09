@@ -15,7 +15,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ConfidenceBar } from "@/components/confidence-bar";
-import { confirmMemory, flagMemory, deleteMemory } from "@/lib/api";
+import { confirmMemoryAction, flagMemoryAction, deleteMemoryAction } from "@/lib/actions";
 import { formatDate, sourceTypeLabel } from "@/lib/utils";
 import type { MemoryRow } from "@/lib/db";
 
@@ -94,7 +94,7 @@ export function MemoryCard({ memory: m }: MemoryCardProps) {
               variant="ghost"
               size="sm"
               disabled={loading}
-              onClick={() => handleAction(() => confirmMemory(m.id))}
+              onClick={() => handleAction(() => confirmMemoryAction(m.id))}
             >
               <CheckCircle size={14} className="mr-1" />
               Confirm
@@ -103,7 +103,7 @@ export function MemoryCard({ memory: m }: MemoryCardProps) {
               variant="ghost"
               size="sm"
               disabled={loading}
-              onClick={() => handleAction(() => flagMemory(m.id))}
+              onClick={() => handleAction(() => flagMemoryAction(m.id))}
             >
               <AlertTriangle size={14} className="mr-1" />
               Flag
@@ -112,7 +112,7 @@ export function MemoryCard({ memory: m }: MemoryCardProps) {
               variant="ghost"
               size="sm"
               disabled={loading}
-              onClick={() => handleAction(() => deleteMemory(m.id))}
+              onClick={() => handleAction(() => deleteMemoryAction(m.id))}
               className="text-[var(--color-danger)] hover:bg-[var(--color-danger-bg)]"
             >
               <Trash2 size={14} className="mr-1" />
