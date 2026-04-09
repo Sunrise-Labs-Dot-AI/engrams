@@ -1,0 +1,126 @@
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
+import { getMemoryById, getMemoryEvents, getMemoryConnections } from "@/lib/db";
+import {
+  formatDate,
+  formatConfidence,
+  sourceTypeLabel,
+} from "@/lib/utils";
+import { Card } from "@/components/ui/card";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { ConfidenceBar } from "@/components/confidence-bar";
+import { EventTimeline } from "@/components/event-timeline";
+import { ConnectionGraph } from "@/components/connection-graph";
+import { MemoryActions } from "./actions";
+
+export const dynamic = "force-dynamic";
+
+interface PageProps {
+  params: Promise<{ id: string }>;
+}
+
+export default async function MemoryDetailPage({ params }: PageProps) {
+  const { id } = await params;
+  const memory = getMemoryById(id);
+  if (!memory) notFound();
+
+  const events = getMemoryEvents(id);
+  const connections = getMemoryConnections(id);
+
+  return (
+    <div className="space-y-6">
+      <Link
+        href="/"
+        className="inline-flex items-center gap-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+      >
+        <ArrowLeft size={14} />
+        Back to memories
+      </Link>
+
+      <Card className="p-6">
+        <div className="space-y-4">
+          <div>
+            <p className="text-base leading-relaxed">{memory.content}</p>
+            {memory.detail && (
+              <p className="mt-2 text-sm text-[var(--color-text-secondary)]">
+                {memory.detail}
+              </p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <StatusBadge variant="accent">{memory.domain}</StatusBadge>
+            <StatusBadge variant="neutral">
+              {sourceTypeLabel(memory.source_type)}
+            </StatusBadge>
+            <span className="text-xs text-[var(--color-text-muted)]">
+              by {memory.source_agent_name}
+            </span>
+            {memory.source_description && (
+              <span className="text-xs text-[var(--color-text-muted)] italic">
+                — {memory.source_description}
+              </span>
+            )}
+          </div>
+
+          <div className="max-w-xs">
+            <ConfidenceBar confidence={memory.confidence} />
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <Card className="p-4">
+          <h3 className="text-sm font-semibold mb-3">Stats</h3>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-[var(--color-text-muted)]">Confidence</span>
+              <p className="font-medium">{formatConfidence(memory.confidence)}</p>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-muted)]">Confirmed</span>
+              <p className="font-medium">{memory.confirmed_count}x</p>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-muted)]">Corrected</span>
+              <p className="font-medium">{memory.corrected_count}x</p>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-muted)]">Mistakes</span>
+              <p className="font-medium">{memory.mistake_count}x</p>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-muted)]">Used</span>
+              <p className="font-medium">{memory.used_count}x</p>
+            </div>
+            <div>
+              <span className="text-[var(--color-text-muted)]">Learned</span>
+              <p className="font-medium">{formatDate(memory.learned_at)}</p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <h3 className="text-sm font-semibold mb-3">Actions</h3>
+          <MemoryActions id={memory.id} />
+        </Card>
+      </div>
+
+      <Card className="p-4">
+        <h3 className="text-sm font-semibold mb-3">Connections</h3>
+        <ConnectionGraph
+          outgoing={connections.outgoing}
+          incoming={connections.incoming}
+        />
+      </Card>
+
+      <Card className="p-4">
+        <h3 className="text-sm font-semibold mb-3">
+          Event Timeline ({events.length})
+        </h3>
+        <EventTimeline events={events} />
+      </Card>
+    </div>
+  );
+}

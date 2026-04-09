@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.engrams/
+*.db
+*.db-wal
+*.db-shm
+.turbo/
+.next/

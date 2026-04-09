@@ -1,0 +1,57 @@
+{
+  "name": "engrams",
+  "version": "0.1.0",
+  "description": "Universal AI memory layer — MCP server with persistent, cross-tool memory for Claude Code, Cursor, Windsurf, and more",
+  "type": "module",
+  "bin": {
+    "engrams": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "echo 'no tests yet'",
+    "prepublishOnly": "pnpm run build"
+  },
+  "keywords": [
+    "mcp",
+    "memory",
+    "ai",
+    "agents",
+    "claude",
+    "cursor",
+    "windsurf",
+    "model-context-protocol",
+    "sqlite",
+    "local-first"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sunrise-Labs-Dot-AI/engrams.git"
+  },
+  "homepage": "https://getengrams.com",
+  "author": "Sunrise Labs <hello@sunrise-labs.ai>",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.8.0",
+    "drizzle-orm": "^0.45.2",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@engrams/core": "workspace:*",
+    "@types/better-sqlite3": "^7.6.13",
+    "tsup": "^8.5.1",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.1"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@engrams/core",
+  "version": "0.1.0",
+  "description": "Schema, types, and confidence engine for Engrams",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
+  },
+  "peerDependencies": {
+    "better-sqlite3": ">=11"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.8.0",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.1"
+  }
+}

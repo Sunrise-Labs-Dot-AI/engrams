@@ -1,0 +1,759 @@
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { eq, and, isNull, desc, sql, gte } from "drizzle-orm";
+import { randomBytes } from "crypto";
+import {
+  createDatabase,
+  searchFTS,
+  memories,
+  memoryConnections,
+  memoryEvents,
+  agentPermissions,
+  getInitialConfidence,
+  applyConfirm,
+  applyCorrect,
+  applyMistake,
+  applyUsed,
+} from "@engrams/core";
+import type { SourceType, Relationship } from "@engrams/core";
+
+function generateId(): string {
+  return randomBytes(16).toString("hex");
+}
+
+function now(): string {
+  return new Date().toISOString();
+}
+
+function textResult(data: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+  };
+}
+
+export async function startServer() {
+  const server = new McpServer({
+    name: "engrams",
+    version: "0.1.0",
+  });
+
+  const { db, sqlite } = createDatabase();
+
+  // --- Instructions Resource ---
+
+  server.resource("memory-instructions", "memory://instructions", async (uri) => {
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "text/plain",
+          text: `# Engrams — Memory Guidelines
+
+You have access to Engrams, a persistent memory system shared across all AI tools this user connects. Memories you save here are available in future conversations and across other tools (Claude Code, Cursor, Claude Desktop, etc.).
+
+## When to save a memory
+- User states a preference ("I prefer morning meetings", "I use vim keybindings")
+- User corrects you or provides factual context about themselves ("I'm a PM, not an engineer", "My team uses pnpm, not npm")
+- User shares information useful across future conversations (goals, relationships, routines, project context)
+- You observe a consistent pattern in the user's behavior (inferred, lower confidence)
+- Another agent shared knowledge relevant to this conversation (cross-agent)
+
+## When NOT to save a memory
+- Ephemeral task details ("fix the bug on line 42") — these don't persist across conversations
+- Information already in the codebase or git history — read the source of truth instead
+- Debugging steps or temporary workarounds
+- Anything the user asks you not to remember
+
+## How to use memories
+- Search Engrams at the start of conversations when context about the user would help
+- Before asking the user a question, check if the answer is already in memory
+- When a memory helps you give a better response, use it but don't narrate that you searched
+- If you act on a memory and the user confirms it was helpful, call memory_confirm
+- If you act on a memory and it was wrong, call memory_flag_mistake
+- If the user corrects a memory, call memory_correct with the updated content
+
+## Source types
+- "stated": User explicitly told you (highest initial confidence: 0.90)
+- "observed": You noticed from the user's actions (0.75)
+- "inferred": You deduced from context (0.65)
+- "cross-agent": Another agent shared this (0.70)
+
+## Domains
+Organize memories by life domain: general, work, health, finance, relationships, daily-life, learning, creative, or any domain that fits. Use consistent domain names.`,
+        },
+      ],
+    };
+  });
+
+  // --- Tools ---
+
+  server.tool(
+    "memory_write",
+    "Save something you learned about the user to persistent cross-tool memory. Call this when the user states a preference, corrects an assumption, shares personal context, or reveals information useful across future conversations. Do NOT save ephemeral task details.",
+    {
+      content: z.string().describe("The memory content"),
+      domain: z.string().optional().describe("Life domain (default: general)"),
+      detail: z.string().optional().describe("Extended context"),
+      sourceAgentId: z.string().describe("Your agent ID"),
+      sourceAgentName: z.string().describe("Your agent name"),
+      sourceType: z.enum(["stated", "inferred", "observed", "cross-agent"]).describe("How this memory was acquired"),
+      sourceDescription: z.string().optional().describe("Description of source"),
+      force: z.boolean().optional().describe("Skip duplicate detection and save anyway"),
+    },
+    async (params) => {
+      // --- Dedup check: search FTS5 for similar existing content ---
+      if (!params.force) {
+        const dedupResults = searchFTS(sqlite, params.content, 5);
+        if (dedupResults.length > 0) {
+          const rowids = dedupResults.map((r) => r.rowid);
+          const placeholders = rowids.map(() => "?").join(",");
+          const existing = sqlite
+            .prepare(
+              `SELECT * FROM memories WHERE rowid IN (${placeholders}) AND deleted_at IS NULL`,
+            )
+            .all(...rowids) as Record<string, unknown>[];
+
+          if (existing.length > 0) {
+            return textResult({
+              duplicate_detected: true,
+              existing_memory: existing[0],
+              message:
+                "A similar memory already exists. Use memory_update to modify it, memory_confirm to reinforce it, or add force: true to save anyway.",
+              all_matches: existing.length,
+            });
+          }
+        }
+      }
+
+      const id = generateId();
+      const confidence = getInitialConfidence(params.sourceType as SourceType);
+      const timestamp = now();
+
+      db.insert(memories)
+        .values({
+          id,
+          content: params.content,
+          detail: params.detail ?? null,
+          domain: params.domain ?? "general",
+          sourceAgentId: params.sourceAgentId,
+          sourceAgentName: params.sourceAgentName,
+          sourceType: params.sourceType,
+          sourceDescription: params.sourceDescription ?? null,
+          confidence,
+          learnedAt: timestamp,
+        })
+        .run();
+
+      const eventId = generateId();
+      db.insert(memoryEvents)
+        .values({
+          id: eventId,
+          memoryId: id,
+          eventType: "created",
+          agentId: params.sourceAgentId,
+          agentName: params.sourceAgentName,
+          newValue: JSON.stringify({ content: params.content, domain: params.domain ?? "general" }),
+          timestamp,
+        })
+        .run();
+
+      return textResult({ id, confidence, domain: params.domain ?? "general", created: true });
+    },
+  );
+
+  server.tool(
+    "memory_search",
+    "Search the user's persistent memory for relevant context. Call this at the start of conversations or before answering questions where prior knowledge about the user would help. Also call before asking the user something — the answer may already be in memory.",
+    {
+      query: z.string().describe("Search query"),
+      domain: z.string().optional().describe("Filter by domain"),
+      minConfidence: z.number().optional().describe("Minimum confidence threshold"),
+      limit: z.number().optional().describe("Max results (default 20)"),
+    },
+    async (params) => {
+      const limit = params.limit ?? 20;
+      const ftsResults = searchFTS(sqlite, params.query, limit * 2);
+
+      if (ftsResults.length === 0) {
+        return textResult({ memories: [], count: 0 });
+      }
+
+      const rowids = ftsResults.map((r) => r.rowid);
+      const placeholders = rowids.map(() => "?").join(",");
+
+      let query = `
+        SELECT m.* FROM memories m
+        WHERE m.rowid IN (${placeholders})
+          AND m.deleted_at IS NULL
+      `;
+      const queryParams: unknown[] = [...rowids];
+
+      if (params.domain) {
+        query += ` AND m.domain = ?`;
+        queryParams.push(params.domain);
+      }
+      if (params.minConfidence !== undefined) {
+        query += ` AND m.confidence >= ?`;
+        queryParams.push(params.minConfidence);
+      }
+
+      query += ` ORDER BY m.confidence DESC LIMIT ?`;
+      queryParams.push(limit);
+
+      const results = sqlite.prepare(query).all(...queryParams) as Record<string, unknown>[];
+
+      // --- Auto-track usage: bump used_count and last_used_at on returned memories ---
+      if (results.length > 0) {
+        const timestamp = now();
+        const updateStmt = sqlite.prepare(
+          `UPDATE memories SET used_count = used_count + 1, last_used_at = ? WHERE id = ?`,
+        );
+        const insertEventStmt = sqlite.prepare(
+          `INSERT INTO memory_events (id, memory_id, event_type, timestamp) VALUES (?, ?, 'used', ?)`,
+        );
+        const batchUpdate = sqlite.transaction(() => {
+          for (const mem of results) {
+            updateStmt.run(timestamp, mem.id);
+            insertEventStmt.run(generateId(), mem.id, timestamp);
+          }
+        });
+        batchUpdate();
+      }
+
+      return textResult({ memories: results, count: results.length });
+    },
+  );
+
+  server.tool(
+    "memory_update",
+    "Update an existing memory's content, detail, or domain",
+    {
+      id: z.string().describe("Memory ID to update"),
+      content: z.string().optional().describe("New content"),
+      detail: z.string().optional().describe("New detail"),
+      domain: z.string().optional().describe("New domain"),
+      agentId: z.string().optional().describe("Your agent ID"),
+      agentName: z.string().optional().describe("Your agent name"),
+    },
+    async (params) => {
+      const existing = db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.id, params.id), isNull(memories.deletedAt)))
+        .get();
+
+      if (!existing) {
+        return textResult({ error: "Memory not found or deleted" });
+      }
+
+      const updates: Record<string, unknown> = {};
+      if (params.content !== undefined) updates.content = params.content;
+      if (params.detail !== undefined) updates.detail = params.detail;
+      if (params.domain !== undefined) updates.domain = params.domain;
+
+      if (Object.keys(updates).length === 0) {
+        return textResult({ error: "No fields to update" });
+      }
+
+      db.update(memories).set(updates).where(eq(memories.id, params.id)).run();
+
+      db.insert(memoryEvents)
+        .values({
+          id: generateId(),
+          memoryId: params.id,
+          eventType: "confidence_changed",
+          agentId: params.agentId ?? null,
+          agentName: params.agentName ?? null,
+          oldValue: JSON.stringify({
+            content: existing.content,
+            detail: existing.detail,
+            domain: existing.domain,
+          }),
+          newValue: JSON.stringify(updates),
+          timestamp: now(),
+        })
+        .run();
+
+      return textResult({ id: params.id, updated: true, changes: updates });
+    },
+  );
+
+  server.tool(
+    "memory_remove",
+    "Delete a memory the user no longer wants stored. Call when the user explicitly asks to forget something.",
+    {
+      id: z.string().describe("Memory ID to remove"),
+      reason: z.string().optional().describe("Reason for removal"),
+      agentId: z.string().optional().describe("Your agent ID"),
+      agentName: z.string().optional().describe("Your agent name"),
+    },
+    async (params) => {
+      const existing = db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.id, params.id), isNull(memories.deletedAt)))
+        .get();
+
+      if (!existing) {
+        return textResult({ error: "Memory not found or already deleted" });
+      }
+
+      const timestamp = now();
+      db.update(memories)
+        .set({ deletedAt: timestamp })
+        .where(eq(memories.id, params.id))
+        .run();
+
+      db.insert(memoryEvents)
+        .values({
+          id: generateId(),
+          memoryId: params.id,
+          eventType: "removed",
+          agentId: params.agentId ?? null,
+          agentName: params.agentName ?? null,
+          newValue: JSON.stringify({ reason: params.reason }),
+          timestamp,
+        })
+        .run();
+
+      return textResult({ id: params.id, removed: true });
+    },
+  );
+
+  server.tool(
+    "memory_confirm",
+    "Confirm a memory is still accurate. Call this when you act on a memory and the user validates it was correct, or when the user reaffirms something you already know.",
+    {
+      id: z.string().describe("Memory ID to confirm"),
+      agentId: z.string().optional().describe("Your agent ID"),
+      agentName: z.string().optional().describe("Your agent name"),
+    },
+    async (params) => {
+      const existing = db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.id, params.id), isNull(memories.deletedAt)))
+        .get();
+
+      if (!existing) {
+        return textResult({ error: "Memory not found or deleted" });
+      }
+
+      const newConfidence = applyConfirm(existing.confidence);
+      const timestamp = now();
+
+      db.update(memories)
+        .set({
+          confidence: newConfidence,
+          confirmedCount: existing.confirmedCount + 1,
+          confirmedAt: timestamp,
+        })
+        .where(eq(memories.id, params.id))
+        .run();
+
+      db.insert(memoryEvents)
+        .values({
+          id: generateId(),
+          memoryId: params.id,
+          eventType: "confirmed",
+          agentId: params.agentId ?? null,
+          agentName: params.agentName ?? null,
+          oldValue: JSON.stringify({ confidence: existing.confidence }),
+          newValue: JSON.stringify({ confidence: newConfidence }),
+          timestamp,
+        })
+        .run();
+
+      return textResult({
+        id: params.id,
+        confirmed: true,
+        previousConfidence: existing.confidence,
+        newConfidence,
+        confirmedCount: existing.confirmedCount + 1,
+      });
+    },
+  );
+
+  server.tool(
+    "memory_correct",
+    "Replace a memory's content with corrected information. Call this when the user says a memory is wrong and provides the right answer. Resets confidence to 0.50.",
+    {
+      id: z.string().describe("Memory ID to correct"),
+      content: z.string().describe("The corrected content"),
+      agentId: z.string().optional().describe("Your agent ID"),
+      agentName: z.string().optional().describe("Your agent name"),
+    },
+    async (params) => {
+      const existing = db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.id, params.id), isNull(memories.deletedAt)))
+        .get();
+
+      if (!existing) {
+        return textResult({ error: "Memory not found or deleted" });
+      }
+
+      const newConfidence = applyCorrect();
+      const timestamp = now();
+
+      db.update(memories)
+        .set({
+          content: params.content,
+          confidence: newConfidence,
+          correctedCount: existing.correctedCount + 1,
+        })
+        .where(eq(memories.id, params.id))
+        .run();
+
+      db.insert(memoryEvents)
+        .values({
+          id: generateId(),
+          memoryId: params.id,
+          eventType: "corrected",
+          agentId: params.agentId ?? null,
+          agentName: params.agentName ?? null,
+          oldValue: JSON.stringify({ content: existing.content, confidence: existing.confidence }),
+          newValue: JSON.stringify({ content: params.content, confidence: newConfidence }),
+          timestamp,
+        })
+        .run();
+
+      return textResult({
+        id: params.id,
+        corrected: true,
+        previousConfidence: existing.confidence,
+        newConfidence,
+        correctedCount: existing.correctedCount + 1,
+      });
+    },
+  );
+
+  server.tool(
+    "memory_flag_mistake",
+    "Flag a memory as wrong or outdated. Call this when you act on a memory and the outcome was incorrect, or when the user says a memory is no longer true. Degrades confidence by 0.15.",
+    {
+      id: z.string().describe("Memory ID to flag"),
+      agentId: z.string().optional().describe("Your agent ID"),
+      agentName: z.string().optional().describe("Your agent name"),
+    },
+    async (params) => {
+      const existing = db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.id, params.id), isNull(memories.deletedAt)))
+        .get();
+
+      if (!existing) {
+        return textResult({ error: "Memory not found or deleted" });
+      }
+
+      const newConfidence = applyMistake(existing.confidence);
+      const timestamp = now();
+
+      db.update(memories)
+        .set({
+          confidence: newConfidence,
+          mistakeCount: existing.mistakeCount + 1,
+        })
+        .where(eq(memories.id, params.id))
+        .run();
+
+      db.insert(memoryEvents)
+        .values({
+          id: generateId(),
+          memoryId: params.id,
+          eventType: "confidence_changed",
+          agentId: params.agentId ?? null,
+          agentName: params.agentName ?? null,
+          oldValue: JSON.stringify({ confidence: existing.confidence }),
+          newValue: JSON.stringify({ confidence: newConfidence, flaggedAsMistake: true }),
+          timestamp,
+        })
+        .run();
+
+      return textResult({
+        id: params.id,
+        flagged: true,
+        previousConfidence: existing.confidence,
+        newConfidence,
+        mistakeCount: existing.mistakeCount + 1,
+      });
+    },
+  );
+
+  server.tool(
+    "memory_connect",
+    "Create a relationship between two memories",
+    {
+      sourceMemoryId: z.string().describe("Source memory ID"),
+      targetMemoryId: z.string().describe("Target memory ID"),
+      relationship: z
+        .enum(["influences", "supports", "contradicts", "related", "learned-together"])
+        .describe("Type of relationship"),
+    },
+    async (params) => {
+      const source = db.select().from(memories).where(eq(memories.id, params.sourceMemoryId)).get();
+      const target = db.select().from(memories).where(eq(memories.id, params.targetMemoryId)).get();
+
+      if (!source || !target) {
+        return textResult({ error: "One or both memories not found" });
+      }
+
+      db.insert(memoryConnections)
+        .values({
+          sourceMemoryId: params.sourceMemoryId,
+          targetMemoryId: params.targetMemoryId,
+          relationship: params.relationship,
+        })
+        .run();
+
+      return textResult({
+        connected: true,
+        sourceMemoryId: params.sourceMemoryId,
+        targetMemoryId: params.targetMemoryId,
+        relationship: params.relationship,
+      });
+    },
+  );
+
+  server.tool(
+    "memory_get_connections",
+    "Get all connections for a memory",
+    {
+      memoryId: z.string().describe("Memory ID to get connections for"),
+    },
+    async (params) => {
+      const outgoing = db
+        .select()
+        .from(memoryConnections)
+        .where(eq(memoryConnections.sourceMemoryId, params.memoryId))
+        .all();
+
+      const incoming = db
+        .select()
+        .from(memoryConnections)
+        .where(eq(memoryConnections.targetMemoryId, params.memoryId))
+        .all();
+
+      return textResult({
+        memoryId: params.memoryId,
+        outgoing,
+        incoming,
+        totalConnections: outgoing.length + incoming.length,
+      });
+    },
+  );
+
+  server.tool(
+    "memory_list_domains",
+    "List all memory domains with counts",
+    {},
+    async () => {
+      const results = sqlite
+        .prepare(
+          `SELECT domain, COUNT(*) as count FROM memories WHERE deleted_at IS NULL GROUP BY domain ORDER BY count DESC`,
+        )
+        .all() as { domain: string; count: number }[];
+
+      return textResult({ domains: results });
+    },
+  );
+
+  server.tool(
+    "memory_list",
+    "Browse the user's memories by domain. Use this to show the user what you know about them in a specific area, or to review memories before a task.",
+    {
+      domain: z.string().optional().describe("Filter by domain"),
+      sortBy: z.enum(["confidence", "recency"]).optional().describe("Sort order (default: confidence)"),
+      limit: z.number().optional().describe("Max results (default 20)"),
+      offset: z.number().optional().describe("Offset for pagination"),
+    },
+    async (params) => {
+      const limit = params.limit ?? 20;
+      const offset = params.offset ?? 0;
+      const sortBy = params.sortBy ?? "confidence";
+
+      let query = `SELECT * FROM memories WHERE deleted_at IS NULL`;
+      const queryParams: unknown[] = [];
+
+      if (params.domain) {
+        query += ` AND domain = ?`;
+        queryParams.push(params.domain);
+      }
+
+      if (sortBy === "confidence") {
+        query += ` ORDER BY confidence DESC`;
+      } else {
+        query += ` ORDER BY learned_at DESC`;
+      }
+
+      query += ` LIMIT ? OFFSET ?`;
+      queryParams.push(limit, offset);
+
+      const results = sqlite.prepare(query).all(...queryParams);
+
+      const countQuery = params.domain
+        ? sqlite
+            .prepare(`SELECT COUNT(*) as total FROM memories WHERE deleted_at IS NULL AND domain = ?`)
+            .get(params.domain) as { total: number }
+        : (sqlite
+            .prepare(`SELECT COUNT(*) as total FROM memories WHERE deleted_at IS NULL`)
+            .get() as { total: number });
+
+      return textResult({
+        memories: results,
+        count: results.length,
+        total: countQuery.total,
+        offset,
+        limit,
+      });
+    },
+  );
+
+  server.tool(
+    "memory_set_permissions",
+    "Set per-agent read/write permissions for a domain",
+    {
+      agentId: z.string().describe("Agent ID"),
+      domain: z.string().describe("Domain (* for all)"),
+      canRead: z.boolean().optional().describe("Allow reading (default true)"),
+      canWrite: z.boolean().optional().describe("Allow writing (default true)"),
+    },
+    async (params) => {
+      const existing = db
+        .select()
+        .from(agentPermissions)
+        .where(
+          and(
+            eq(agentPermissions.agentId, params.agentId),
+            eq(agentPermissions.domain, params.domain),
+          ),
+        )
+        .get();
+
+      const canRead = params.canRead !== undefined ? (params.canRead ? 1 : 0) : 1;
+      const canWrite = params.canWrite !== undefined ? (params.canWrite ? 1 : 0) : 1;
+
+      if (existing) {
+        db.update(agentPermissions)
+          .set({ canRead, canWrite })
+          .where(
+            and(
+              eq(agentPermissions.agentId, params.agentId),
+              eq(agentPermissions.domain, params.domain),
+            ),
+          )
+          .run();
+      } else {
+        db.insert(agentPermissions)
+          .values({
+            agentId: params.agentId,
+            domain: params.domain,
+            canRead,
+            canWrite,
+          })
+          .run();
+      }
+
+      return textResult({
+        agentId: params.agentId,
+        domain: params.domain,
+        canRead: !!canRead,
+        canWrite: !!canWrite,
+        updated: true,
+      });
+    },
+  );
+
+  // --- Resources ---
+
+  server.resource("memory-index", "memory://index", async (uri) => {
+    const domains = sqlite
+      .prepare(
+        `SELECT domain, COUNT(*) as count FROM memories WHERE deleted_at IS NULL GROUP BY domain`,
+      )
+      .all() as { domain: string; count: number }[];
+
+    const totalResult = sqlite
+      .prepare(`SELECT COUNT(*) as total FROM memories WHERE deleted_at IS NULL`)
+      .get() as { total: number };
+
+    const confidenceDist = sqlite
+      .prepare(`
+        SELECT
+          SUM(CASE WHEN confidence >= 0.9 THEN 1 ELSE 0 END) as high,
+          SUM(CASE WHEN confidence >= 0.5 AND confidence < 0.9 THEN 1 ELSE 0 END) as medium,
+          SUM(CASE WHEN confidence < 0.5 THEN 1 ELSE 0 END) as low
+        FROM memories WHERE deleted_at IS NULL
+      `)
+      .get() as { high: number; medium: number; low: number };
+
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify(
+            { total: totalResult.total, domains, confidenceDistribution: confidenceDist },
+            null,
+            2,
+          ),
+        },
+      ],
+    };
+  });
+
+  server.resource(
+    "memory-domain",
+    new ResourceTemplate("memory://domain/{name}", { list: undefined }),
+    async (uri, params) => {
+      const name = params.name as string;
+      const results = sqlite
+        .prepare(
+          `SELECT * FROM memories WHERE deleted_at IS NULL AND domain = ? ORDER BY confidence DESC`,
+        )
+        .all(name);
+
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify({ domain: name, memories: results }, null, 2),
+          },
+        ],
+      };
+    },
+  );
+
+  server.resource("memory-recent", "memory://recent", async (uri) => {
+    const results = sqlite
+      .prepare(
+        `SELECT * FROM memories WHERE deleted_at IS NULL ORDER BY learned_at DESC LIMIT 20`,
+      )
+      .all();
+
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "application/json",
+          text: JSON.stringify({ memories: results, count: results.length }, null, 2),
+        },
+      ],
+    };
+  });
+
+  // --- Start ---
+
+  // Start HTTP API for dashboard mutations (opt-in via --http flag or ENGRAMS_HTTP=1)
+  if (process.argv.includes("--http") || process.env.ENGRAMS_HTTP === "1") {
+    const { startHttpApi } = await import("./http.js");
+    startHttpApi(db, sqlite);
+  }
+
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
