@@ -37,7 +37,8 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sunrise-Labs-Dot-AI/engrams.git"
+    "url": "git+https://github.com/Sunrise-Labs-Dot-AI/engrams.git",
+    "directory": "packages/mcp-server"
   },
   "homepage": "https://getengrams.com",
   "author": "Sunrise Labs <hello@sunrise-labs.ai>",
