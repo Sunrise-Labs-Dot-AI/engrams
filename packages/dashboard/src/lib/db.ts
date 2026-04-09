@@ -46,6 +46,7 @@ export interface MemoryRow {
   confirmed_at: string | null;
   last_used_at: string | null;
   deleted_at: string | null;
+  has_pii_flag: number;
 }
 
 export interface EventRow {

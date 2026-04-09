@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
+  ShieldAlert,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -50,6 +51,12 @@ export function MemoryCard({ memory: m }: MemoryCardProps) {
             <StatusBadge variant="neutral">
               {sourceTypeLabel(m.source_type)}
             </StatusBadge>
+            {!!m.has_pii_flag && (
+              <StatusBadge variant="warning">
+                <ShieldAlert size={12} className="mr-0.5 inline" />
+                PII
+              </StatusBadge>
+            )}
             <span className="text-xs text-[var(--color-text-muted)]">
               {m.source_agent_name}
             </span>

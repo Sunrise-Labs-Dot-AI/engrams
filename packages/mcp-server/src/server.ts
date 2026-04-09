@@ -22,6 +22,8 @@ import {
   hybridSearch,
   backfillEmbeddings,
   bumpLastModified,
+  detectSensitiveData,
+  redactSensitiveData,
 } from "@engrams/core";
 import type { SourceType, Relationship } from "@engrams/core";
 
@@ -177,6 +179,11 @@ Organize memories by life domain: general, work, health, finance, relationships,
       const confidence = getInitialConfidence(params.sourceType as SourceType);
       const timestamp = now();
 
+      // --- PII detection ---
+      const piiText = params.content + (params.detail ? " " + params.detail : "");
+      const piiMatches = detectSensitiveData(piiText);
+      const hasPii = piiMatches.length > 0;
+
       db.insert(memories)
         .values({
           id,
@@ -189,6 +196,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
           sourceDescription: params.sourceDescription ?? null,
           confidence,
           learnedAt: timestamp,
+          hasPiiFlag: hasPii ? 1 : 0,
         })
         .run();
 
@@ -255,6 +263,9 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
       bumpLastModified(sqlite);
 
       const result: Record<string, unknown> = { id, confidence, domain: params.domain ?? "general", created: true };
+      if (hasPii) {
+        result._pii_detected = [...new Set(piiMatches.map((m) => m.type))];
+      }
       if (splitSuggestion?.should_split && splitSuggestion.parts) {
         result.split_suggested = true;
         result.suggested_parts = splitSuggestion.parts;
@@ -768,6 +779,85 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
         originalId: params.id,
         newMemories: newIds,
         count: newIds.length,
+      });
+    },
+  );
+
+  server.tool(
+    "memory_scrub",
+    "Scan a memory for sensitive data (PII, API keys, etc.) and optionally redact it. Use this to check memories before sharing or to clean up accidentally stored secrets.",
+    {
+      id: z.string().describe("Memory ID to scan"),
+      redact: z.boolean().optional().describe("Replace detected PII with redaction tokens (default false)"),
+    },
+    async (params) => {
+      const existing = db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.id, params.id), isNull(memories.deletedAt)))
+        .get();
+
+      if (!existing) {
+        return textResult({ error: "Memory not found or deleted" });
+      }
+
+      const fullText = existing.content + (existing.detail ? " " + existing.detail : "");
+      const matches = detectSensitiveData(fullText);
+
+      if (params.redact && matches.length > 0) {
+        const { redacted: redactedContent } = redactSensitiveData(existing.content);
+        const redactedDetail = existing.detail
+          ? redactSensitiveData(existing.detail).redacted
+          : null;
+
+        db.update(memories)
+          .set({
+            content: redactedContent,
+            detail: redactedDetail,
+            hasPiiFlag: 0,
+          })
+          .where(eq(memories.id, params.id))
+          .run();
+
+        // Re-embed with redacted content
+        if (vecAvailable) {
+          try {
+            const embeddingText = redactedContent + (redactedDetail ? " " + redactedDetail : "");
+            const embedding = await generateEmbedding(embeddingText);
+            insertEmbedding(sqlite, params.id, embedding);
+          } catch {
+            // Non-fatal
+          }
+        }
+
+        db.insert(memoryEvents)
+          .values({
+            id: generateId(),
+            memoryId: params.id,
+            eventType: "corrected",
+            agentName: "engrams:scrub",
+            oldValue: JSON.stringify({ content: existing.content, detail: existing.detail }),
+            newValue: JSON.stringify({ content: redactedContent, detail: redactedDetail }),
+            timestamp: now(),
+          })
+          .run();
+
+        bumpLastModified(sqlite);
+
+        return textResult({
+          id: params.id,
+          scrubbed: true,
+          detected: matches.map((m) => ({ type: m.type, start: m.start, end: m.end })),
+          redactedContent,
+          redactedDetail,
+        });
+      }
+
+      return textResult({
+        id: params.id,
+        detected: matches.map((m) => ({ type: m.type, start: m.start, end: m.end })),
+        hasPii: matches.length > 0,
+        count: matches.length,
       });
     },
   );

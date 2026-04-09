@@ -20,6 +20,7 @@ export const memories = sqliteTable("memories", {
   confirmedAt: text("confirmed_at"),
   lastUsedAt: text("last_used_at"),
   deletedAt: text("deleted_at"),
+  hasPiiFlag: integer("has_pii_flag").notNull().default(0),
 });
 
 export const memoryConnections = sqliteTable("memory_connections", {

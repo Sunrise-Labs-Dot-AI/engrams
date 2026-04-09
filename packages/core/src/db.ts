@@ -63,6 +63,28 @@ const CREATE_TABLES_SQL = `
   INSERT OR IGNORE INTO engrams_meta (key, value) VALUES ('last_modified', datetime('now'));
 `;
 
+const MIGRATIONS_SQL = `
+  -- Add has_pii_flag column if it doesn't exist
+  -- SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we use a pragma check
+  CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
+  INSERT OR IGNORE INTO _migrations (name) VALUES ('add_has_pii_flag');
+`;
+
+function runMigrations(sqlite: Database.Database): void {
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`);
+  const hasPiiMigration = sqlite
+    .prepare(`SELECT 1 FROM _migrations WHERE name = 'add_has_pii_flag'`)
+    .get();
+  if (!hasPiiMigration) {
+    try {
+      sqlite.exec(`ALTER TABLE memories ADD COLUMN has_pii_flag INTEGER NOT NULL DEFAULT 0`);
+    } catch {
+      // Column may already exist from a previous partial migration
+    }
+    sqlite.prepare(`INSERT OR IGNORE INTO _migrations (name) VALUES ('add_has_pii_flag')`).run();
+  }
+}
+
 export function createDatabase(dbPath?: string): { db: EngramsDatabase; sqlite: Database.Database; vecAvailable: boolean } {
   const dir = resolve(homedir(), ".engrams");
   mkdirSync(dir, { recursive: true });
@@ -73,6 +95,7 @@ export function createDatabase(dbPath?: string): { db: EngramsDatabase; sqlite: 
   sqlite.pragma("foreign_keys = ON");
 
   sqlite.exec(CREATE_TABLES_SQL);
+  runMigrations(sqlite);
   setupFTS(sqlite);
 
   let vecAvailable = false;

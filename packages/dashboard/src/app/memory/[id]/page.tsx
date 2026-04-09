@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ShieldAlert } from "lucide-react";
 import { getMemoryById, getMemoryEvents, getMemoryConnections } from "@/lib/db";
 import {
   formatDate,
@@ -48,6 +48,12 @@ export default async function MemoryDetailPage({ params }: PageProps) {
             <StatusBadge variant="neutral">
               {sourceTypeLabel(memory.source_type)}
             </StatusBadge>
+            {!!memory.has_pii_flag && (
+              <StatusBadge variant="warning">
+                <ShieldAlert size={12} className="mr-0.5 inline" />
+                Contains sensitive data
+              </StatusBadge>
+            )}
             <span className="text-xs text-[var(--color-text-muted)]">
               by {memory.source_agent_name}
             </span>
