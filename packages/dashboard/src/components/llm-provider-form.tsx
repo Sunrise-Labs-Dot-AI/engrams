@@ -16,9 +16,10 @@ interface Props {
     extractionModel?: string;
     analysisModel?: string;
   };
+  userId?: string | null;
 }
 
-export function LLMProviderForm({ initialStatus }: Props) {
+export function LLMProviderForm({ initialStatus, userId }: Props) {
   const [provider, setProvider] = useState(initialStatus.provider || "anthropic");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(provider === "ollama" ? "http://localhost:11434/v1" : "");
@@ -35,7 +36,7 @@ export function LLMProviderForm({ initialStatus }: Props) {
     e.preventDefault();
     setSaving(true);
     setStatus(null);
-    const result = await saveLLMConfig(provider, apiKey, baseUrl, extractionModel, analysisModel);
+    const result = await saveLLMConfig(userId ?? null, provider, apiKey, baseUrl, extractionModel, analysisModel);
     if (result.success) {
       setStatus({ type: "success", message: `Connected (${provider})` });
     } else {
@@ -74,7 +75,7 @@ export function LLMProviderForm({ initialStatus }: Props) {
             className="w-full rounded border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1.5 text-sm"
           />
           <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-            Stored locally in ~/.engrams/config.json
+            {userId ? "Encrypted and stored securely" : "Stored locally in ~/.engrams/config.json"}
           </p>
         </div>
       )}

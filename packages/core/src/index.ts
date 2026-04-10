@@ -23,4 +23,6 @@ export { parseLLMJson } from "./llm-utils.js";
 export { resolveLLMProvider, requireLLMProvider } from "./llm-config.js";
 export { validateExtraction, validateSplit, validateCorrection, checkSemanticPreservation } from "./llm-validation.js";
 export type { ValidationResult } from "./llm-validation.js";
+export { generateToken, hashToken } from "./tokens.js";
+export { userSettings, apiTokens } from "./schema.js";
 export type { Client } from "@libsql/client";

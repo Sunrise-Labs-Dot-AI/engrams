@@ -56,6 +56,32 @@ const CREATE_TABLES_SQL = `
     can_write INTEGER NOT NULL DEFAULT 1
   );
 
+  CREATE TABLE IF NOT EXISTS user_settings (
+    user_id TEXT PRIMARY KEY,
+    tier TEXT NOT NULL DEFAULT 'free',
+    byok_provider TEXT,
+    byok_api_key_enc TEXT,
+    byok_base_url TEXT,
+    byok_extraction_model TEXT,
+    byok_analysis_model TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS api_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    token_prefix TEXT NOT NULL,
+    name TEXT NOT NULL,
+    scopes TEXT NOT NULL DEFAULT 'read,write',
+    expires_at TEXT,
+    last_used_at TEXT,
+    last_ip TEXT,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS engrams_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -122,6 +148,47 @@ async function runMigrations(client: Client): Promise<void> {
           AND updated_at IS NULL;
       END;
     `);
+  });
+
+  await runMigration(client, "add_pro_tables", async () => {
+    await client.executeMultiple(`
+      CREATE TABLE IF NOT EXISTS user_settings (
+        user_id TEXT PRIMARY KEY,
+        tier TEXT NOT NULL DEFAULT 'free',
+        byok_provider TEXT,
+        byok_api_key_enc TEXT,
+        byok_base_url TEXT,
+        byok_extraction_model TEXT,
+        byok_analysis_model TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS api_tokens (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        token_prefix TEXT NOT NULL,
+        name TEXT NOT NULL,
+        scopes TEXT NOT NULL DEFAULT 'read,write',
+        expires_at TEXT,
+        last_used_at TEXT,
+        last_ip TEXT,
+        revoked_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+  });
+
+  await runMigration(client, "add_user_id_columns", async () => {
+    await client.executeMultiple(`
+      ALTER TABLE memories ADD COLUMN user_id TEXT;
+      ALTER TABLE memory_connections ADD COLUMN user_id TEXT;
+      ALTER TABLE memory_events ADD COLUMN user_id TEXT;
+      ALTER TABLE agent_permissions ADD COLUMN user_id TEXT;
+    `);
+    await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id)`, args: [] });
+    await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash)`, args: [] });
+    await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id)`, args: [] });
   });
 
   await runMigration(client, "fts_add_entity_name", async () => {
