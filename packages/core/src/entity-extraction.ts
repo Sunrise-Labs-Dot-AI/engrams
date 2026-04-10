@@ -32,23 +32,28 @@ Memory: ${content}${truncatedDetail ? `\nDetail: ${truncatedDetail}` : ""}${exis
 
 Respond with JSON only:
 {
-  "entity_type": "person|organization|place|project|preference|event|goal|fact",
+  "entity_type": "person|organization|place|project|preference|event|goal|fact|lesson|routine|skill|resource|decision",
   "entity_name": "canonical name or null if not applicable",
   "structured_data": { type-specific fields },
   "suggested_connections": [
-    { "target_entity_name": "...", "target_entity_type": "...", "relationship": "works_at|involves|located_at|part_of|about|related" }
+    { "target_entity_name": "...", "target_entity_type": "...", "relationship": "works_at|involves|located_at|part_of|about|related|informed_by|uses" }
   ]
 }
 
-Entity type definitions:
-- person: about a specific individual
-- organization: about a company, team, or group
-- place: about a location
-- project: about a work project or initiative
-- preference: about what the user likes/dislikes/prefers
-- event: about something that happened or will happen
-- goal: about something the user wants to achieve
-- fact: general knowledge that doesn't fit other types
+Entity type definitions (choose the BEST fit):
+- person: about a specific individual. Name, role, relationship to user.
+- organization: about a company, team, or group.
+- place: about a location.
+- project: about a work project or initiative. NOT a tool (use resource).
+- preference: what the user likes/dislikes/prefers. NOT a habit (use routine).
+- event: something that happened or will happen at a specific time. NOT recurring (use routine).
+- goal: something the user wants to achieve in the future. NOT something already learned (use lesson).
+- fact: general knowledge or factual info. NOT a learning from experience (use lesson).
+- lesson: something learned from experience — has a "because" or story behind it. NOT a bare fact.
+- routine: a recurring behavior, habit, or workflow the user follows regularly. NOT a one-time event.
+- skill: a proficiency or expertise area the user has. NOT a preference.
+- resource: an external tool, service, document, or URL the user uses. NOT a project.
+- decision: a specific choice the user made, with reasoning. NOT an event (focuses on rationale, not timing).
 
 For entity_name, use the canonical form (e.g. "Sarah Chen" not "my manager Sarah"). If an existing entity name matches, use that exact spelling.
 
@@ -60,7 +65,12 @@ For structured_data, include relevant fields:
 - preference: category, strength (strong/mild/contextual)
 - event: what, when, who
 - goal: what, timeline, status (active/achieved/abandoned)
-- fact: category`;
+- fact: category
+- lesson: topic, context, source (experience/observation/advice)
+- routine: activity, frequency, status (active/lapsed/aspirational)
+- skill: domain, level (beginner/intermediate/advanced/expert), context
+- resource: name, type (tool/service/document/url/book/other), url, purpose
+- decision: what, rationale, alternatives, when, status (active/revisiting/reversed)`;
 
   const text = await provider.complete(prompt, { maxTokens: 2048, json: true });
   let result = parseLLMJson<ExtractionResult>(text);

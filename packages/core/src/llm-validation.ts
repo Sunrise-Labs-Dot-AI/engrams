@@ -7,7 +7,7 @@ export interface ValidationResult {
   qualityScore: number;
 }
 
-const VALID_ENTITY_TYPES = ["person", "organization", "place", "project", "preference", "event", "goal", "fact"];
+const VALID_ENTITY_TYPES = ["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"];
 
 /**
  * Validate an entity extraction result.

@@ -30,3 +30,72 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
 }
+
+.prose-engrams {
+  line-height: 1.6;
+}
+.prose-engrams p {
+  margin: 0.25em 0;
+}
+.prose-engrams h1, .prose-engrams h2, .prose-engrams h3 {
+  color: var(--color-text);
+  font-weight: 600;
+  margin: 0.5em 0 0.25em;
+}
+.prose-engrams h1 { font-size: 1.1em; }
+.prose-engrams h2 { font-size: 1em; }
+.prose-engrams h3 { font-size: 0.95em; }
+.prose-engrams ul, .prose-engrams ol {
+  padding-left: 1.25em;
+  margin: 0.25em 0;
+}
+.prose-engrams ul { list-style-type: disc; }
+.prose-engrams ol { list-style-type: decimal; }
+.prose-engrams li { margin: 0.1em 0; }
+.prose-engrams a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-engrams a:hover {
+  color: var(--color-accent-text);
+}
+.prose-engrams code {
+  font-family: "JetBrains Mono", monospace;
+  background: var(--color-bg-soft);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+.prose-engrams pre {
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.75em;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.prose-engrams pre code {
+  background: none;
+  padding: 0;
+}
+.prose-engrams blockquote {
+  border-left: 2px solid var(--color-accent-solid);
+  padding-left: 0.75em;
+  color: var(--color-text-secondary);
+  margin: 0.5em 0;
+}
+.prose-engrams table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  width: 100%;
+}
+.prose-engrams th, .prose-engrams td {
+  border: 1px solid var(--color-border);
+  padding: 0.3em 0.5em;
+  text-align: left;
+}
+.prose-engrams th {
+  background: var(--color-bg-soft);
+  font-weight: 600;
+}

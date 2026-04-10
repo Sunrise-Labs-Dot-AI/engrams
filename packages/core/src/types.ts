@@ -19,7 +19,9 @@ export type Relationship =
   | "involves"
   | "located_at"
   | "part_of"
-  | "about";
+  | "about"
+  | "informed_by"
+  | "uses";
 export type EventType =
   | "created"
   | "confirmed"
@@ -36,7 +38,12 @@ export type EntityType =
   | "preference"
   | "event"
   | "goal"
-  | "fact";
+  | "fact"
+  | "lesson"
+  | "routine"
+  | "skill"
+  | "resource"
+  | "decision";
 
 export interface PersonData {
   name: string;
@@ -83,6 +90,39 @@ export interface FactData {
   category?: string;
 }
 
+export interface LessonData {
+  topic: string;
+  context?: string;
+  source?: "experience" | "observation" | "advice";
+}
+
+export interface RoutineData {
+  activity: string;
+  frequency?: string;
+  status?: "active" | "lapsed" | "aspirational";
+}
+
+export interface SkillData {
+  domain?: string;
+  level?: "beginner" | "intermediate" | "advanced" | "expert";
+  context?: string;
+}
+
+export interface ResourceData {
+  name: string;
+  type?: "tool" | "service" | "document" | "url" | "book" | "other";
+  url?: string;
+  purpose?: string;
+}
+
+export interface DecisionData {
+  what: string;
+  rationale?: string;
+  alternatives?: string[];
+  when?: string;
+  status?: "active" | "revisiting" | "reversed";
+}
+
 export type StructuredData =
   | PersonData
   | OrganizationData
@@ -91,4 +131,9 @@ export type StructuredData =
   | PreferenceData
   | EventData
   | GoalData
-  | FactData;
+  | FactData
+  | LessonData
+  | RoutineData
+  | SkillData
+  | ResourceData
+  | DecisionData;

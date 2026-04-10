@@ -3,6 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   CheckCircle,
   Pencil,
@@ -92,9 +94,9 @@ export function MemoryCard({ memory: m }: MemoryCardProps) {
       {expanded && (
         <div className="mt-3 pt-3 border-t border-[var(--color-border-light)]">
           {m.detail && (
-            <p className="text-xs text-[var(--color-text-secondary)] mb-3">
-              {m.detail}
-            </p>
+            <div className="text-xs text-[var(--color-text-secondary)] mb-3 prose-engrams">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.detail}</ReactMarkdown>
+            </div>
           )}
           {m.source_description && (
             <p className="text-xs text-[var(--color-text-muted)] mb-3 italic">
