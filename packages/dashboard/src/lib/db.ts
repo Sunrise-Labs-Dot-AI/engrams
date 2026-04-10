@@ -876,3 +876,56 @@ export async function restoreMemoryById(id: string, userId?: string | null): Pro
   });
   return true;
 }
+
+// --- Entity Profiles ---
+
+export interface EntityProfileRow {
+  id: string;
+  entity_name: string;
+  entity_type: string;
+  summary: string;
+  memory_ids: string;
+  token_count: number;
+  generated_at: string;
+  user_id: string | null;
+}
+
+export async function getEntityProfile(entityName: string, userId?: string | null): Promise<EntityProfileRow | null> {
+  const client = getClient();
+  const uf = userFilter(userId);
+  const result = await client.execute({
+    sql: `SELECT * FROM memory_summaries WHERE entity_name = ?${uf.clause} LIMIT 1`,
+    args: [entityName, ...uf.args],
+  });
+  return (result.rows[0] as unknown as EntityProfileRow) ?? null;
+}
+
+export async function getMemoriesByEntityName(entityName: string, userId?: string | null): Promise<MemoryRow[]> {
+  const client = getClient();
+  const uf = userFilter(userId);
+  const result = await client.execute({
+    sql: `SELECT * FROM memories WHERE entity_name = ? COLLATE NOCASE AND deleted_at IS NULL${uf.clause} ORDER BY confidence DESC, learned_at DESC`,
+    args: [entityName, ...uf.args],
+  });
+  return result.rows as unknown as MemoryRow[];
+}
+
+export async function getEntityConnections(entityName: string, userId?: string | null): Promise<{ name: string; type: string; relationship: string }[]> {
+  const client = getClient();
+  const uf = userFilter(userId);
+  const result = await client.execute({
+    sql: `SELECT DISTINCT m2.entity_name as name, m2.entity_type as type, mc.relationship
+          FROM memory_connections mc
+          JOIN memories m1 ON mc.source_memory_id = m1.id
+          JOIN memories m2 ON mc.target_memory_id = m2.id
+          WHERE m1.entity_name = ? COLLATE NOCASE AND m1.deleted_at IS NULL AND m2.deleted_at IS NULL${uf.clause}
+          UNION
+          SELECT DISTINCT m1.entity_name as name, m1.entity_type as type, mc.relationship
+          FROM memory_connections mc
+          JOIN memories m1 ON mc.source_memory_id = m1.id
+          JOIN memories m2 ON mc.target_memory_id = m2.id
+          WHERE m2.entity_name = ? COLLATE NOCASE AND m1.deleted_at IS NULL AND m2.deleted_at IS NULL${uf.clause}`,
+    args: [entityName, ...uf.args, entityName, ...uf.args],
+  });
+  return result.rows as unknown as { name: string; type: string; relationship: string }[];
+}

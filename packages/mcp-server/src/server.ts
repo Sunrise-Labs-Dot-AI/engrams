@@ -41,6 +41,9 @@ import {
   loadConfig,
   saveConfig,
   contextSearch,
+  getOrGenerateProfile,
+  listProfiles,
+  isProfileStale,
 } from "@engrams/core";
 import type { SourceType, Relationship, EntityType, Permanence, LLMProvider, Client } from "@engrams/core";
 
@@ -704,12 +707,12 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
             if (!current || current.entity_type) return;
 
-            // Update entity type
+            // Update entity type + summary
             await client.execute({
-              sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ? WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
+              sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ?, summary = COALESCE(?, summary) WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
               args: userId
-                ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), id, userId]
-                : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), id],
+                ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, id, userId]
+                : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, id],
             });
 
             // Auto-create suggested connections
@@ -806,10 +809,10 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
                     if (!val.valid) return;
 
                     await client.execute({
-                      sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ? WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
+                      sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ?, summary = COALESCE(?, summary) WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
                       args: userId
-                        ? [ext.entity_type, ext.entity_name, JSON.stringify(ext.structured_data), capturedPartId, userId]
-                        : [ext.entity_type, ext.entity_name, JSON.stringify(ext.structured_data), capturedPartId],
+                        ? [ext.entity_type, ext.entity_name, JSON.stringify(ext.structured_data), ext.summary ?? null, capturedPartId, userId]
+                        : [ext.entity_type, ext.entity_name, JSON.stringify(ext.structured_data), ext.summary ?? null, capturedPartId],
                     });
 
                     for (const conn of ext.suggested_connections) {
@@ -1023,6 +1026,55 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
       }
 
       return textResult(result);
+    },
+  );
+
+  server.tool(
+    "memory_briefing",
+    "Generate or retrieve a pre-computed entity profile — a concise summary paragraph about a person, project, organization, or other entity based on all related memories. Profiles are cached and auto-regenerated when stale (>24h). Use this to get a quick briefing before meetings, when context-switching between projects, or to understand what you know about an entity.",
+    {
+      entity_name: z.string().describe("Entity name to get a profile for (e.g., 'Sarah Chen', 'Project Alpha')"),
+      entity_type: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Entity type filter (optional — inferred from memories if omitted)"),
+      regenerate: z.boolean().optional().describe("Force regenerate the profile even if cached (default false)"),
+    },
+    async (params, extra) => {
+      const userId = getUserId(extra as Record<string, unknown>);
+
+      const analysisProvider = resolveLLMProvider("analysis");
+      if (!analysisProvider && !params.regenerate) {
+        // Try to return cached profile without LLM
+        const { getProfile } = await import("@engrams/core");
+        const cached = await getProfile(client, params.entity_name, params.entity_type, userId);
+        if (cached) return textResult(cached);
+        return textResult({ error: "No LLM provider configured and no cached profile exists. Set ANTHROPIC_API_KEY or configure a provider via memory_configure." });
+      }
+
+      const shouldRegenerate = params.regenerate === true;
+      const profile = await getOrGenerateProfile(
+        client,
+        analysisProvider,
+        params.entity_name,
+        params.entity_type,
+        { regenerate: shouldRegenerate, userId: userId ?? undefined },
+      );
+
+      if (!profile) {
+        return textResult({ error: `No memories found for entity "${params.entity_name}"` });
+      }
+
+      // Check staleness and auto-regenerate if needed
+      if (!shouldRegenerate && isProfileStale(profile) && analysisProvider) {
+        const refreshed = await getOrGenerateProfile(
+          client,
+          analysisProvider,
+          params.entity_name,
+          params.entity_type,
+          { regenerate: true, userId: userId ?? undefined },
+        );
+        if (refreshed) return textResult(refreshed);
+      }
+
+      return textResult(profile);
     },
   );
 
@@ -1841,10 +1893,10 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
           }
 
           await client.execute({
-            sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ? WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
+            sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ?, summary = COALESCE(?, summary) WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
             args: userId
-              ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), mem.id, userId]
-              : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), mem.id],
+              ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, mem.id, userId]
+              : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, mem.id],
           });
 
           // Auto-create connections
@@ -2682,10 +2734,10 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
                 if (!validation.valid) continue;
 
                 await client.execute({
-                  sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ? WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
+                  sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ?, summary = COALESCE(?, summary) WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
                   args: userId
-                    ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), id, userId]
-                    : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), id],
+                    ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, id, userId]
+                    : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, id],
                 });
 
                 for (const conn of extraction.suggested_connections) {

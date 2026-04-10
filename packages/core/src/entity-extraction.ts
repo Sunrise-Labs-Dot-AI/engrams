@@ -6,6 +6,7 @@ export interface ExtractionResult {
   entity_type: EntityType;
   entity_name: string | null;
   structured_data: Record<string, unknown>;
+  summary: string | null;
   suggested_connections: {
     target_entity_name: string;
     target_entity_type: string;
@@ -34,6 +35,7 @@ Respond with JSON only:
 {
   "entity_type": "person|organization|place|project|preference|event|goal|fact|lesson|routine|skill|resource|decision",
   "entity_name": "canonical name or null if not applicable",
+  "summary": "one-line summary under 15 words capturing the key point",
   "structured_data": { type-specific fields },
   "suggested_connections": [
     { "target_entity_name": "...", "target_entity_type": "...", "relationship": "works_at|involves|located_at|part_of|about|related|informed_by|uses" }
@@ -94,6 +96,10 @@ For structured_data, include relevant fields:
   if (!raw.suggested_connections && raw.suggestedConnections) {
     result.suggested_connections = raw.suggestedConnections as ExtractionResult["suggested_connections"];
   }
+  if (!result.summary && typeof raw.summary === "string") {
+    result.summary = raw.summary;
+  }
+  result.summary = result.summary ?? null;
 
   return result;
 }

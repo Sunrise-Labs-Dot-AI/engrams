@@ -24,6 +24,7 @@ export const memories = sqliteTable("memories", {
   entityType: text("entity_type"),
   entityName: text("entity_name"),
   structuredData: text("structured_data"),
+  summary: text("summary"),
   permanence: text("permanence"),
   expiresAt: text("expires_at"),
   archivedAt: text("archived_at"),
@@ -75,6 +76,17 @@ export const userSettings = sqliteTable("user_settings", {
   byokAnalysisModel: text("byok_analysis_model"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+
+export const memorySummaries = sqliteTable("memory_summaries", {
+  id: text("id").primaryKey(),
+  entityName: text("entity_name").notNull(),
+  entityType: text("entity_type").notNull(),
+  summary: text("summary").notNull(),
+  memoryIds: text("memory_ids").notNull(), // JSON array
+  tokenCount: integer("token_count").notNull(),
+  generatedAt: text("generated_at").notNull(),
+  userId: text("user_id"),
 });
 
 export const apiTokens = sqliteTable("api_tokens", {

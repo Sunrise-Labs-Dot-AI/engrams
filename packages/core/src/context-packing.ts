@@ -1,6 +1,7 @@
 import type { Client } from "@libsql/client";
 import { hybridSearch, type ExpandedResult } from "./search.js";
 import { effectivePermanence } from "./confidence.js";
+import { getProfile } from "./entity-profiles.js";
 
 // --- Token estimation ---
 
@@ -39,6 +40,12 @@ export interface ContextReference {
   snippet: string;
 }
 
+export interface EntityProfileSummary {
+  entityName: string;
+  entityType: string;
+  summary: string;
+}
+
 export interface HierarchicalResult {
   primary: {
     memories: ContextMemory[];
@@ -50,6 +57,10 @@ export interface HierarchicalResult {
   };
   references: {
     items: ContextReference[];
+    tokenCount: number;
+  };
+  entityProfiles?: {
+    profiles: EntityProfileSummary[];
     tokenCount: number;
   };
   meta: {
@@ -175,11 +186,14 @@ function referenceTokenCount(cr: ContextReference): number {
 function packHierarchical(
   results: ExpandedResult[],
   tokenBudget: number,
+  entityProfiles?: EntityProfileSummary[],
 ): HierarchicalResult {
-  // Budget allocation: primary 50%, secondary 25%, references 10%, overhead 15%
+  // Budget allocation: primary 50%, profiles 15%, secondary 25%, references 10%
+  const hasProfiles = entityProfiles && entityProfiles.length > 0;
   const primaryBudget = Math.floor(tokenBudget * 0.50);
-  const secondaryBudget = Math.floor(tokenBudget * 0.30);
-  const referencesBudget = Math.floor(tokenBudget * 0.20);
+  const profileBudget = hasProfiles ? Math.floor(tokenBudget * 0.15) : 0;
+  const secondaryBudget = Math.floor(tokenBudget * (hasProfiles ? 0.25 : 0.30));
+  const referencesBudget = Math.floor(tokenBudget * (hasProfiles ? 0.10 : 0.20));
 
   const primary: ContextMemory[] = [];
   let primaryTokens = 0;
@@ -219,14 +233,31 @@ function packHierarchical(
     idx++;
   }
 
+  // Include entity profiles if available
+  let profilesSection: HierarchicalResult["entityProfiles"];
+  let profileTokens = 0;
+  if (hasProfiles) {
+    const includedProfiles: EntityProfileSummary[] = [];
+    for (const profile of entityProfiles) {
+      const tokens = estimateTokens(profile.summary) + 15;
+      if (profileTokens + tokens > profileBudget && includedProfiles.length > 0) break;
+      includedProfiles.push(profile);
+      profileTokens += tokens;
+    }
+    if (includedProfiles.length > 0) {
+      profilesSection = { profiles: includedProfiles, tokenCount: profileTokens };
+    }
+  }
+
   return {
     primary: { memories: primary, tokenCount: primaryTokens },
     secondary: { summaries: secondary, tokenCount: secondaryTokens },
     references: { items: references, tokenCount: referenceTokens },
+    ...(profilesSection ? { entityProfiles: profilesSection } : {}),
     meta: {
       totalMatches: results.length,
       tokenBudget,
-      tokensUsed: primaryTokens + secondaryTokens + referenceTokens,
+      tokensUsed: primaryTokens + secondaryTokens + referenceTokens + profileTokens,
       format: "hierarchical",
     },
   };
@@ -340,5 +371,28 @@ export async function contextSearch(
     return packNarrative(filtered, tokenBudget);
   }
 
-  return packHierarchical(filtered, tokenBudget);
+  // Fetch entity profiles for unique entity names in results
+  const entityNames = new Set<string>();
+  for (const r of filtered) {
+    const name = r.memory.entity_name as string | null;
+    if (name) entityNames.add(name);
+  }
+
+  const profiles: EntityProfileSummary[] = [];
+  for (const name of entityNames) {
+    try {
+      const profile = await getProfile(client, name, undefined, options.userId);
+      if (profile) {
+        profiles.push({
+          entityName: profile.entityName,
+          entityType: profile.entityType,
+          summary: profile.summary,
+        });
+      }
+    } catch {
+      // Non-fatal — profile lookup failure shouldn't block search
+    }
+  }
+
+  return packHierarchical(filtered, tokenBudget, profiles);
 }
