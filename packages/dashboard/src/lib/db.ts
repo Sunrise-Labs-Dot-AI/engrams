@@ -844,7 +844,7 @@ export async function directUpdateMemory(id: string, content: string, detail: st
 }
 
 export async function pinMemoryById(id: string, userId?: string | null): Promise<boolean> {
-  const client = getClient();
+  const client = await getClient();
   const uf = userFilter(userId);
   const existing = await client.execute({
     sql: `SELECT confidence, permanence FROM memories WHERE id = ? AND deleted_at IS NULL${uf.clause}`,
@@ -867,7 +867,7 @@ export async function pinMemoryById(id: string, userId?: string | null): Promise
 }
 
 export async function archiveMemoryById(id: string, userId?: string | null): Promise<boolean> {
-  const client = getClient();
+  const client = await getClient();
   const uf = userFilter(userId);
   const existing = await client.execute({
     sql: `SELECT permanence FROM memories WHERE id = ? AND deleted_at IS NULL${uf.clause}`,
@@ -892,7 +892,7 @@ export async function getArchivedMemories(opts?: {
   search?: string;
   sortBy?: "archived" | "confidence" | "learned";
 }, userId?: string | null): Promise<MemoryRow[]> {
-  const client = getClient();
+  const client = await getClient();
   const uf = userFilter(userId);
 
   let sql: string;
@@ -916,7 +916,7 @@ export async function getArchivedMemories(opts?: {
 }
 
 export async function bulkRestoreMemories(ids: string[], userId?: string | null): Promise<number> {
-  const client = getClient();
+  const client = await getClient();
   const uf = userFilter(userId);
   let restored = 0;
   for (const id of ids) {
@@ -927,7 +927,7 @@ export async function bulkRestoreMemories(ids: string[], userId?: string | null)
 }
 
 export async function restoreMemoryById(id: string, userId?: string | null): Promise<boolean> {
-  const client = getClient();
+  const client = await getClient();
   const uf = userFilter(userId);
   const existing = await client.execute({
     sql: `SELECT permanence FROM memories WHERE id = ? AND deleted_at IS NULL${uf.clause}`,
@@ -962,7 +962,7 @@ export interface EntityProfileRow {
 }
 
 export async function getEntityProfile(entityName: string, userId?: string | null): Promise<EntityProfileRow | null> {
-  const client = getClient();
+  const client = await getClient();
   const uf = userFilter(userId);
   const result = await client.execute({
     sql: `SELECT * FROM memory_summaries WHERE entity_name = ?${uf.clause} LIMIT 1`,
@@ -972,7 +972,7 @@ export async function getEntityProfile(entityName: string, userId?: string | nul
 }
 
 export async function getMemoriesByEntityName(entityName: string, userId?: string | null): Promise<MemoryRow[]> {
-  const client = getClient();
+  const client = await getClient();
   const uf = userFilter(userId);
   const result = await client.execute({
     sql: `SELECT * FROM memories WHERE entity_name = ? COLLATE NOCASE AND deleted_at IS NULL${uf.clause} ORDER BY confidence DESC, learned_at DESC`,
@@ -982,7 +982,7 @@ export async function getMemoriesByEntityName(entityName: string, userId?: strin
 }
 
 export async function getEntityConnections(entityName: string, userId?: string | null): Promise<{ name: string; type: string; relationship: string }[]> {
-  const client = getClient();
+  const client = await getClient();
   const uf = userFilter(userId);
   const result = await client.execute({
     sql: `SELECT DISTINCT m2.entity_name as name, m2.entity_type as type, mc.relationship
