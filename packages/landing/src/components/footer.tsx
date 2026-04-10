@@ -30,6 +30,20 @@ export function Footer() {
         >
           npm
         </a>
+        {" · "}
+        <a
+          href="/terms"
+          className="text-text-muted hover:text-text transition-colors"
+        >
+          Terms
+        </a>
+        {" · "}
+        <a
+          href="/privacy"
+          className="text-text-muted hover:text-text transition-colors"
+        >
+          Privacy
+        </a>
       </p>
     </footer>
   );

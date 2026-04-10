@@ -24,6 +24,7 @@ export const memories = sqliteTable("memories", {
   entityType: text("entity_type"),
   entityName: text("entity_name"),
   structuredData: text("structured_data"),
+  userId: text("user_id"),
   updatedAt: text("updated_at"),
 });
 
@@ -35,6 +36,7 @@ export const memoryConnections = sqliteTable("memory_connections", {
     .notNull()
     .references(() => memories.id),
   relationship: text("relationship").notNull(),
+  userId: text("user_id"),
   updatedAt: text("updated_at"),
 });
 
@@ -48,6 +50,7 @@ export const memoryEvents = sqliteTable("memory_events", {
   agentName: text("agent_name"),
   oldValue: text("old_value"),
   newValue: text("new_value"),
+  userId: text("user_id"),
   timestamp: text("timestamp").notNull(),
 });
 
@@ -56,4 +59,31 @@ export const agentPermissions = sqliteTable("agent_permissions", {
   domain: text("domain").notNull(),
   canRead: integer("can_read").notNull().default(1),
   canWrite: integer("can_write").notNull().default(1),
+  userId: text("user_id"),
+});
+
+export const userSettings = sqliteTable("user_settings", {
+  userId: text("user_id").primaryKey(),
+  tier: text("tier").notNull().default("free"), // 'free' | 'pro' | 'pro_ai'
+  byokProvider: text("byok_provider"), // 'anthropic' | 'openai' | 'ollama' | null
+  byokApiKeyEnc: text("byok_api_key_enc"), // AES-256-GCM encrypted with ENGRAMS_ENCRYPTION_KEY
+  byokBaseUrl: text("byok_base_url"),
+  byokExtractionModel: text("byok_extraction_model"),
+  byokAnalysisModel: text("byok_analysis_model"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const apiTokens = sqliteTable("api_tokens", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  tokenHash: text("token_hash").notNull().unique(),  // SHA-256(token)
+  tokenPrefix: text("token_prefix").notNull(),        // first 8 chars for display: "engrams_ab12..."
+  name: text("name").notNull(),                       // "Claude Desktop", "Cursor", etc.
+  scopes: text("scopes").notNull().default("read,write"),
+  expiresAt: text("expires_at"),                      // NULL = no expiration
+  lastUsedAt: text("last_used_at"),
+  lastIp: text("last_ip"),
+  revokedAt: text("revoked_at"),                      // soft revoke
+  createdAt: text("created_at").notNull(),
 });
