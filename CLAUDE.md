@@ -15,7 +15,7 @@ An open-source MCP server + localhost web dashboard that gives AI agents persist
 
 ## Current State (April 2026)
 
-V1 and V2 are feature complete. 20 MCP tools, 92 tests, hybrid search, entity types, knowledge graph, confidence decay, dedup, PII detection, and a full Next.js dashboard.
+V1–V3 feature complete. 25 MCP tools, 105 tests (92 core + 13 server), hybrid search, 13 entity types, knowledge graph, confidence decay, dedup, PII detection, memory permanence tiers, context-packed search, entity profiles, and a full Next.js dashboard.
 
 **Shipped:**
 - Onboarding flow (`memory_onboard`, `memory_import`, dashboard empty state + review queue)
@@ -23,12 +23,17 @@ V1 and V2 are feature complete. 20 MCP tools, 92 tests, hybrid search, entity ty
 - Permission enforcement (checkPermission on all read/write paths, interactive dashboard agents page)
 - Landing page (`packages/landing`) + dashboard restyle (Pensieve design system)
 - Copyright cleanup (MIT license + metadata on all packages)
-- Pro tier: Clerk auth, BYOK config, API tokens, terms + privacy pages
-- npm published (`engrams` on npm)
+- Pro tier: Clerk auth, BYOK config, API tokens, terms + privacy pages, API key encryption (AES-256-GCM + scrypt)
+- npm published (`engrams` on npm, v0.4.0)
 - Cloud migration tool (`memory_migrate`)
+- Memory permanence tiers: canonical (pinned), active, ephemeral (TTL), archived
+- Context-packed search (`memory_context`) — token-budget-aware retrieval
+- Entity profiles (`memory_briefing`) — LLM-generated summaries with 24h cache
+- Archive page + entity profile pages in dashboard
+- 13 entity types (expanded from 8)
 
 **Deferred (handoffs written, not dispatched):**
-- Pro tier remaining: encryption (AES-256-GCM + scrypt), cloud sync (Turso), hosted dashboard Vercel deployment (`handoff-pro-tier.md`)
+- Pro tier remaining: cloud sync (Turso), hosted dashboard Vercel deployment (`handoff-pro-tier.md`)
 
 ## Tech Stack
 
@@ -40,7 +45,7 @@ V1 and V2 are feature complete. 20 MCP tools, 92 tests, hybrid search, entity ty
 | LLM | Abstracted `LLMProvider` interface — Anthropic (lazy import), OpenAI, Ollama (raw fetch). Per-task model routing: extraction (cheap) vs analysis (capable) |
 | Dashboard | Next.js 15 (App Router), React 19, Tailwind v4, custom UI components |
 | Landing | Next.js 15, Tailwind v4, Pensieve design system |
-| Testing | Vitest (92 tests across 9 files) |
+| Testing | Vitest (105 tests across 10 files) |
 | Build | pnpm workspaces + Turborepo |
 | Distribution | npm (`engrams` package), npx one-liner install |
 
@@ -49,7 +54,7 @@ V1 and V2 are feature complete. 20 MCP tools, 92 tests, hybrid search, entity ty
 ```
 engrams/
 ├── packages/
-│   ├── core/             # @engrams/core — schema, types, confidence engine, LLM abstraction, crypto
+│   ├── core/             # @engrams/core — schema, types, confidence engine, LLM abstraction, crypto, context-packing, entity profiles
 │   ├── mcp-server/       # engrams (npm) — MCP server + CLI entry point
 │   ├── dashboard/        # @engrams/dashboard — Next.js localhost app (port 3838)
 │   └── landing/          # @engrams/landing — getengrams.com landing page
@@ -76,13 +81,14 @@ All runtime data lives in `~/.engrams/`:
 
 ## Database Schema
 
-Eight tables + two virtual tables:
+Nine tables + two virtual tables:
 
-- **memories** — core storage (id, content, detail, domain, source_agent_id/name, cross_agent_id/name, source_type, source_description, confidence, confirmed_count, corrected_count, mistake_count, used_count, learned_at, confirmed_at, last_used_at, deleted_at, has_pii_flag, entity_type, entity_name, structured_data, embedding, updated_at)
-- **memory_connections** — relationship graph (source_memory_id, target_memory_id, relationship, updated_at)
-- **memory_events** — audit trail (id, memory_id, event_type, agent_id, agent_name, old_value, new_value, timestamp)
-- **agent_permissions** — per-agent read/write by domain (agent_id, domain, can_read, can_write)
-- **user_settings** — BYOK provider config, tier, encrypted API keys (user_id, provider, tier, encrypted_key, settings, updated_at)
+- **memories** — core storage (id, content, detail, summary, domain, source_agent_id/name, cross_agent_id/name, source_type, source_description, confidence, confirmed_count, corrected_count, mistake_count, used_count, learned_at, confirmed_at, last_used_at, deleted_at, has_pii_flag, entity_type, entity_name, structured_data, embedding, updated_at, permanence, expires_at, archived_at, user_id)
+- **memory_connections** — relationship graph (source_memory_id, target_memory_id, relationship, updated_at, user_id)
+- **memory_events** — audit trail (id, memory_id, event_type, agent_id, agent_name, old_value, new_value, timestamp, user_id)
+- **agent_permissions** — per-agent read/write by domain (agent_id, domain, can_read, can_write, user_id)
+- **memory_summaries** — cached entity profiles (id, entity_name, entity_type, summary, memory_ids, token_count, generated_at, user_id)
+- **user_settings** — BYOK provider config, tier, encrypted API keys (user_id, tier, byok_provider, byok_api_key_enc, byok_base_url, byok_extraction_model, byok_analysis_model, created_at, updated_at)
 - **api_tokens** — API token management (id, user_id, name, token_hash, scopes, expires_at, revoked_at, created_at)
 - **engrams_meta** — key-value metadata (key, value) — tracks last_modified for cache invalidation
 - **memory_fts** — FTS5 virtual table over content, detail, entity_name, source_agent_name
@@ -92,24 +98,28 @@ IDs are `hex(randomblob(16))`. Timestamps are ISO 8601 TEXT. Confidence is REAL 
 
 ## Entity Types
 
-Memories are classified into 8 entity types: `person`, `organization`, `place`, `project`, `preference`, `event`, `goal`, `fact`. Each has:
+Memories are classified into 13 entity types: `person`, `organization`, `place`, `project`, `preference`, `event`, `goal`, `fact`, `lesson`, `routine`, `skill`, `resource`, `decision`. Each has:
 - `entity_type` — the classification
 - `entity_name` — canonical name for dedup (e.g., "Sarah Chen")
 - `structured_data` — JSON with type-specific fields (role, org, category, etc.)
 
-Entity extraction runs in the background via LLM on every `memory_write` (fire-and-forget). Auto-creates connections between entities (works_at, involves, located_at, part_of, about).
+Entity extraction runs in the background via LLM on every `memory_write` (fire-and-forget). Auto-creates connections between entities (works_at, involves, located_at, part_of, about, informed_by, uses).
 
-## MCP Tools (20)
+## MCP Tools (25)
 
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Hybrid semantic + keyword search with domain/confidence/entity filters |
-| `memory_write` | Create memory with dedup detection (similar_found → 5 resolution options) |
+| `memory_context` | Token-budget-aware context search (hierarchical or narrative output) |
+| `memory_briefing` | Pre-computed entity profile summaries with 24h cache |
+| `memory_write` | Create memory with dedup detection, permanence tier, and optional TTL |
 | `memory_update` | Modify content, detail, or metadata |
 | `memory_confirm` | Mark verified (confidence → 0.99) |
 | `memory_correct` | LLM-powered semantic diff correction |
 | `memory_flag_mistake` | Degrade confidence (-0.15) |
 | `memory_remove` | Soft-delete with reason |
+| `memory_pin` | Pin as canonical (decay-immune, high confidence) |
+| `memory_archive` | Archive for reference (deprioritize in search, freeze confidence) |
 | `memory_connect` | Link memories with typed relationships |
 | `memory_get_connections` | Traverse the relationship graph |
 | `memory_split` | LLM-powered compound memory splitting (two-phase: propose → confirm) |
@@ -121,8 +131,18 @@ Entity extraction runs in the background via LLM on every `memory_write` (fire-a
 | `memory_scrub` | Detect and redact PII patterns |
 | `memory_configure` | Configure LLM provider and model settings |
 | `memory_onboard` | Guided onboarding: scan connected tools → informed interview → seed |
-| `memory_import` | Batch import from Claude, ChatGPT, Cursor, gitconfig |
+| `memory_import` | Batch import from Claude, ChatGPT, Cursor, gitconfig, plaintext |
 | `memory_migrate` | Migrate local memories to cloud (Pro tier) |
+
+## Memory Permanence
+
+Memories have a `permanence` tier that controls decay and search behavior:
+- **canonical** — pinned by user, immune to confidence decay, boosted in search
+- **active** — default tier, normal decay and search ranking
+- **ephemeral** — has a TTL (`expires_at`), auto-swept on decay cycle
+- **archived** — frozen confidence, deprioritized in search, browsable via `/archive`
+
+`memory_write` accepts `permanence` and `ttl` params. TTL format: `"1h"`, `"24h"`, `"7d"`, `"30d"`.
 
 ## Confidence Engine
 
@@ -134,7 +154,10 @@ Entity extraction runs in the background via LLM on every `memory_write` (fire-a
 - correct: confidence → 0.50 (reset to neutral on correction)
 - mistake: max(confidence - 0.15, 0.10)
 - used: min(confidence + 0.02, 0.99)
+- pin: confidence → max(current, 0.95), permanence → "canonical" (immune to decay)
+- archive: permanence → "archived", confidence frozen
 - decay: -0.01 per 30 days since last activity, min 0.10, throttled to once per hour on read paths
+- TTL expiry: ephemeral memories with `expires_at` are swept (soft-deleted) on decay cycle
 
 ### Dedup + Contradiction Resolution
 On `memory_write`: hybrid search (RRF > 0.7) + entity name/type match. If similar found, returns `similar_found` with 5 resolution options: update, correct, add_detail, keep_both, skip. Agent-in-the-loop, resolved in real-time.
@@ -173,7 +196,9 @@ Next.js 15 on localhost:3838. Reads SQLite directly via better-sqlite3 (local mo
 | `/` | Memory browser (search, filter by domain/entity/confidence, inline edit) |
 | `/memory/[id]` | Detail view (provenance, connections, events, edit) |
 | `/agents` | Agent permission management |
+| `/archive` | Archived memories browser with restore actions |
 | `/cleanup` | Health score, dedup, merge, split, contradiction, PII detection + inline actions |
+| `/entities/[name]` | Entity profile page (summary, related memories, connections) |
 | `/graph` | Knowledge graph visualization (D3 force-directed, entity clusters) |
 | `/settings` | DB stats, export, LLM provider config, sync config (Pro) |
 | `/sign-in`, `/sign-up` | Clerk authentication (hosted mode only) |
