@@ -1,6 +1,6 @@
 import { resolve } from "path";
 import { homedir } from "os";
-import type Database from "better-sqlite3";
+import type { Client } from "@libsql/client";
 import { insertEmbedding } from "./vec.js";
 
 export const EMBEDDING_DIM = 384;
@@ -69,21 +69,21 @@ export async function generateEmbeddings(texts: string[]): Promise<Float32Array[
   return results;
 }
 
-export async function backfillEmbeddings(sqlite: Database.Database): Promise<number> {
-  const missing = sqlite
-    .prepare(`
-      SELECT m.id, m.content, m.detail FROM memories m
-      LEFT JOIN memory_embeddings e ON m.id = e.memory_id
-      WHERE m.deleted_at IS NULL AND e.memory_id IS NULL
-    `)
-    .all() as { id: string; content: string; detail: string | null }[];
+export async function backfillEmbeddings(client: Client): Promise<number> {
+  const result = await client.execute({
+    sql: `SELECT id, content, detail FROM memories
+          WHERE deleted_at IS NULL AND embedding IS NULL`,
+    args: [],
+  });
+
+  const missing = result.rows as unknown as { id: string; content: string; detail: string | null }[];
 
   let count = 0;
   for (const mem of missing) {
     try {
       const text = mem.content + (mem.detail ? " " + mem.detail : "");
       const embedding = await generateEmbedding(text);
-      insertEmbedding(sqlite, mem.id, embedding);
+      await insertEmbedding(client, mem.id, embedding);
       count++;
     } catch {
       // Per-memory failure is non-fatal — continue backfilling

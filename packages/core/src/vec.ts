@@ -1,60 +1,105 @@
-import { createRequire } from "module";
-import type Database from "better-sqlite3";
-
-const require = createRequire(import.meta.url);
+import type { Client } from "@libsql/client";
 
 export const EMBEDDING_DIM = 384;
 
-export function setupVec(sqlite: Database.Database): boolean {
+export async function setupVec(client: Client): Promise<boolean> {
   try {
-    const sqliteVec = require("sqlite-vec");
-    sqliteVec.load(sqlite);
+    // Ensure _migrations table exists
+    await client.executeMultiple(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`);
 
-    sqlite.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(
-        memory_id TEXT PRIMARY KEY,
-        embedding float[${EMBEDDING_DIM}]
-      );
-    `);
+    const migrated = await client.execute({
+      sql: `SELECT 1 FROM _migrations WHERE name = 'vec_to_native'`,
+      args: [],
+    });
+
+    if (migrated.rows.length === 0) {
+      // Add embedding column to memories table
+      try {
+        await client.execute({
+          sql: `ALTER TABLE memories ADD COLUMN embedding F32_BLOB(${EMBEDDING_DIM})`,
+          args: [],
+        });
+      } catch {
+        // Column may already exist
+      }
+
+      // Create vector index
+      try {
+        await client.execute({
+          sql: `CREATE INDEX IF NOT EXISTS memories_vec_idx ON memories (libsql_vector_idx(embedding))`,
+          args: [],
+        });
+      } catch {
+        // Index may already exist
+      }
+
+      // Migrate data from old memory_embeddings table if it exists
+      try {
+        const tableCheck = await client.execute({
+          sql: `SELECT name FROM sqlite_master WHERE type='table' AND name='memory_embeddings'`,
+          args: [],
+        });
+        if (tableCheck.rows.length > 0) {
+          await client.execute({
+            sql: `UPDATE memories SET embedding = (
+              SELECT e.embedding FROM memory_embeddings e WHERE e.memory_id = memories.id
+            ) WHERE id IN (SELECT memory_id FROM memory_embeddings)`,
+            args: [],
+          });
+          await client.execute({ sql: `DROP TABLE memory_embeddings`, args: [] });
+        }
+      } catch {
+        // Migration from old table is best-effort
+      }
+
+      await client.execute({
+        sql: `INSERT OR IGNORE INTO _migrations (name) VALUES ('vec_to_native')`,
+        args: [],
+      });
+    }
 
     return true;
   } catch (err) {
     process.stderr.write(
-      `[engrams] sqlite-vec not available — vector search disabled, falling back to FTS5 only: ${err}\n`,
+      `[engrams] libsql vector search not available — falling back to FTS5 only: ${err}\n`,
     );
     return false;
   }
 }
 
-function toBuffer(embedding: Float32Array): Buffer {
-  return Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
-}
-
-export function insertEmbedding(
-  sqlite: Database.Database,
+export async function insertEmbedding(
+  client: Client,
   memoryId: string,
   embedding: Float32Array,
-): void {
-  sqlite
-    .prepare(`INSERT OR REPLACE INTO memory_embeddings (memory_id, embedding) VALUES (?, ?)`)
-    .run(memoryId, toBuffer(embedding));
+): Promise<void> {
+  await client.execute({
+    sql: `UPDATE memories SET embedding = vector(?) WHERE id = ?`,
+    args: [JSON.stringify(Array.from(embedding)), memoryId],
+  });
 }
 
-export function deleteEmbedding(sqlite: Database.Database, memoryId: string): void {
-  sqlite.prepare(`DELETE FROM memory_embeddings WHERE memory_id = ?`).run(memoryId);
+export async function deleteEmbedding(client: Client, memoryId: string): Promise<void> {
+  await client.execute({
+    sql: `UPDATE memories SET embedding = NULL WHERE id = ?`,
+    args: [memoryId],
+  });
 }
 
-export function searchVec(
-  sqlite: Database.Database,
+export async function searchVec(
+  client: Client,
   queryEmbedding: Float32Array,
   limit = 20,
-): { memory_id: string; distance: number }[] {
-  return sqlite
-    .prepare(
-      `SELECT memory_id, distance FROM memory_embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT ?`,
-    )
-    .all(toBuffer(queryEmbedding), limit) as {
-    memory_id: string;
-    distance: number;
-  }[];
+): Promise<{ memory_id: string; distance: number }[]> {
+  const result = await client.execute({
+    sql: `SELECT m.id as memory_id, vt.distance
+          FROM vector_top_k('memories_vec_idx', vector(?), ?) AS vt
+          JOIN memories m ON m.rowid = vt.id
+          WHERE m.deleted_at IS NULL`,
+    args: [JSON.stringify(Array.from(queryEmbedding)), limit],
+  });
+
+  return result.rows.map((row) => ({
+    memory_id: row.memory_id as string,
+    distance: row.distance as number,
+  }));
 }

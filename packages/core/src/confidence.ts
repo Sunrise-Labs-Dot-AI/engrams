@@ -1,18 +1,21 @@
-import type Database from "better-sqlite3";
+import type { Client } from "@libsql/client";
 import type { SourceType } from "./types.js";
 
 export const DECAY_RATE = 0.01; // per 30 days
 export const MIN_CONFIDENCE = 0.10;
 export const DECAY_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-export function applyConfidenceDecay(sqlite: Database.Database): number {
+export async function applyConfidenceDecay(client: Client): Promise<number> {
   const now = new Date();
 
-  const candidates = sqlite.prepare(`
-    SELECT id, confidence, last_used_at, confirmed_at, learned_at
-    FROM memories
-    WHERE deleted_at IS NULL AND confidence > ?
-  `).all(MIN_CONFIDENCE) as {
+  const result = await client.execute({
+    sql: `SELECT id, confidence, last_used_at, confirmed_at, learned_at
+          FROM memories
+          WHERE deleted_at IS NULL AND confidence > ?`,
+    args: [MIN_CONFIDENCE],
+  });
+
+  const candidates = result.rows as unknown as {
     id: string;
     confidence: number;
     last_used_at: string | null;
@@ -33,9 +36,10 @@ export function applyConfidenceDecay(sqlite: Database.Database): number {
 
     const newConfidence = Math.max(mem.confidence - (DECAY_RATE * periods), MIN_CONFIDENCE);
     if (newConfidence < mem.confidence) {
-      sqlite.prepare(
-        `UPDATE memories SET confidence = ? WHERE id = ?`
-      ).run(newConfidence, mem.id);
+      await client.execute({
+        sql: `UPDATE memories SET confidence = ? WHERE id = ?`,
+        args: [newConfidence, mem.id],
+      });
       decayed++;
     }
   }

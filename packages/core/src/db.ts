@@ -1,5 +1,5 @@
-import Database from "better-sqlite3";
-import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { createClient, type Client } from "@libsql/client";
+import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
 import { resolve } from "path";
 import { homedir } from "os";
 import { mkdirSync, chmodSync } from "fs";
@@ -7,7 +7,7 @@ import * as schema from "./schema.js";
 import { setupFTS } from "./fts.js";
 import { setupVec } from "./vec.js";
 
-export type EngramsDatabase = BetterSQLite3Database<typeof schema>;
+export type EngramsDatabase = LibSQLDatabase<typeof schema>;
 
 const CREATE_TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS memories (
@@ -63,51 +63,47 @@ const CREATE_TABLES_SQL = `
   INSERT OR IGNORE INTO engrams_meta (key, value) VALUES ('last_modified', datetime('now'));
 `;
 
-const MIGRATIONS_SQL = `
-  -- Add has_pii_flag column if it doesn't exist
-  -- SQLite doesn't support IF NOT EXISTS for ALTER TABLE, so we use a pragma check
-  CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
-  INSERT OR IGNORE INTO _migrations (name) VALUES ('add_has_pii_flag');
-`;
-
-function runMigration(sqlite: Database.Database, name: string, fn: () => void): void {
-  const exists = sqlite.prepare(`SELECT 1 FROM _migrations WHERE name = ?`).get(name);
-  if (!exists) {
-    try { fn(); } catch { /* Column/index may already exist */ }
-    sqlite.prepare(`INSERT OR IGNORE INTO _migrations (name) VALUES (?)`).run(name);
+async function runMigration(client: Client, name: string, fn: () => Promise<void>): Promise<void> {
+  const exists = await client.execute({ sql: `SELECT 1 FROM _migrations WHERE name = ?`, args: [name] });
+  if (exists.rows.length === 0) {
+    try { await fn(); } catch { /* Column/index may already exist */ }
+    await client.execute({ sql: `INSERT OR IGNORE INTO _migrations (name) VALUES (?)`, args: [name] });
   }
 }
 
-function runMigrations(sqlite: Database.Database): void {
-  sqlite.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`);
+async function runMigrations(client: Client): Promise<void> {
+  await client.executeMultiple(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY)`);
 
-  runMigration(sqlite, "add_has_pii_flag", () => {
-    sqlite.exec(`ALTER TABLE memories ADD COLUMN has_pii_flag INTEGER NOT NULL DEFAULT 0`);
+  await runMigration(client, "add_has_pii_flag", async () => {
+    await client.executeMultiple(`ALTER TABLE memories ADD COLUMN has_pii_flag INTEGER NOT NULL DEFAULT 0`);
   });
 
-  runMigration(sqlite, "add_entity_columns", () => {
-    sqlite.exec(`ALTER TABLE memories ADD COLUMN entity_type TEXT`);
-    sqlite.exec(`ALTER TABLE memories ADD COLUMN entity_name TEXT`);
-    sqlite.exec(`ALTER TABLE memories ADD COLUMN structured_data TEXT`);
-    sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_memories_entity_type ON memories(entity_type) WHERE deleted_at IS NULL`);
-    sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_memories_entity_name ON memories(entity_name) WHERE deleted_at IS NULL`);
+  await runMigration(client, "add_entity_columns", async () => {
+    await client.executeMultiple(`
+      ALTER TABLE memories ADD COLUMN entity_type TEXT;
+      ALTER TABLE memories ADD COLUMN entity_name TEXT;
+      ALTER TABLE memories ADD COLUMN structured_data TEXT;
+    `);
+    await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_memories_entity_type ON memories(entity_type) WHERE deleted_at IS NULL`, args: [] });
+    await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_memories_entity_name ON memories(entity_name) WHERE deleted_at IS NULL`, args: [] });
   });
 
-  runMigration(sqlite, "add_updated_at", () => {
-    sqlite.exec(`ALTER TABLE memories ADD COLUMN updated_at TEXT`);
-    sqlite.exec(`UPDATE memories SET updated_at = COALESCE(confirmed_at, learned_at, datetime('now')) WHERE updated_at IS NULL`);
-    sqlite.exec(`ALTER TABLE memory_connections ADD COLUMN updated_at TEXT`);
-    sqlite.exec(`UPDATE memory_connections SET updated_at = datetime('now') WHERE updated_at IS NULL`);
+  await runMigration(client, "add_updated_at", async () => {
+    await client.executeMultiple(`
+      ALTER TABLE memories ADD COLUMN updated_at TEXT;
+      UPDATE memories SET updated_at = COALESCE(confirmed_at, learned_at, datetime('now')) WHERE updated_at IS NULL;
+      ALTER TABLE memory_connections ADD COLUMN updated_at TEXT;
+      UPDATE memory_connections SET updated_at = datetime('now') WHERE updated_at IS NULL;
+    `);
 
-    // Auto-set updated_at on every insert/update
-    sqlite.exec(`
+    await client.executeMultiple(`
       CREATE TRIGGER IF NOT EXISTS memories_updated_at_insert
       AFTER INSERT ON memories
       BEGIN
         UPDATE memories SET updated_at = datetime('now') WHERE id = NEW.id AND updated_at IS NULL;
       END;
     `);
-    sqlite.exec(`
+    await client.executeMultiple(`
       CREATE TRIGGER IF NOT EXISTS memories_updated_at_update
       AFTER UPDATE ON memories
       WHEN NEW.updated_at IS OLD.updated_at OR NEW.updated_at IS NULL
@@ -115,7 +111,7 @@ function runMigrations(sqlite: Database.Database): void {
         UPDATE memories SET updated_at = datetime('now') WHERE id = NEW.id;
       END;
     `);
-    sqlite.exec(`
+    await client.executeMultiple(`
       CREATE TRIGGER IF NOT EXISTS connections_updated_at_insert
       AFTER INSERT ON memory_connections
       BEGIN
@@ -128,56 +124,74 @@ function runMigrations(sqlite: Database.Database): void {
     `);
   });
 
-  runMigration(sqlite, "fts_add_entity_name", () => {
+  await runMigration(client, "fts_add_entity_name", async () => {
     // Drop old FTS table and triggers, then recreate with entity_name column
-    sqlite.exec(`DROP TRIGGER IF EXISTS memory_fts_insert`);
-    sqlite.exec(`DROP TRIGGER IF EXISTS memory_fts_delete`);
-    sqlite.exec(`DROP TRIGGER IF EXISTS memory_fts_update`);
-    sqlite.exec(`DROP TABLE IF EXISTS memory_fts`);
+    await client.executeMultiple(`
+      DROP TRIGGER IF EXISTS memory_fts_insert;
+      DROP TRIGGER IF EXISTS memory_fts_delete;
+      DROP TRIGGER IF EXISTS memory_fts_update;
+      DROP TABLE IF EXISTS memory_fts;
+    `);
     // setupFTS() will recreate the table and triggers with entity_name included
   });
 }
 
-export function createDatabase(dbPath?: string): { db: EngramsDatabase; sqlite: Database.Database; vecAvailable: boolean } {
+export async function createDatabase(config?: {
+  url?: string;
+  authToken?: string;
+}): Promise<{ db: EngramsDatabase; client: Client; vecAvailable: boolean }> {
   const dir = resolve(homedir(), ".engrams");
   mkdirSync(dir, { recursive: true });
-  const path = dbPath ?? resolve(dir, "engrams.db");
-  const sqlite = new Database(path);
 
-  sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
+  const isLocal = !config?.url || config.url.startsWith("file:");
+  const url = config?.url ?? "file:" + resolve(dir, "engrams.db");
 
-  sqlite.exec(CREATE_TABLES_SQL);
-  runMigrations(sqlite);
-  setupFTS(sqlite);
+  const client = createClient({
+    url,
+    authToken: config?.authToken,
+  });
+
+  // For local mode, apply WAL and foreign keys pragmas
+  if (isLocal) {
+    await client.execute({ sql: "PRAGMA journal_mode = WAL", args: [] });
+    await client.execute({ sql: "PRAGMA foreign_keys = ON", args: [] });
+  }
+
+  await client.executeMultiple(CREATE_TABLES_SQL);
+  await runMigrations(client);
+  await setupFTS(client);
 
   // Rebuild FTS index content (needed after migration drops and recreates the FTS table)
   try {
-    sqlite.exec(`INSERT INTO memory_fts(memory_fts) VALUES('rebuild')`);
+    await client.execute({ sql: `INSERT INTO memory_fts(memory_fts) VALUES('rebuild')`, args: [] });
   } catch {
     // Non-fatal — FTS rebuild may fail if table is already populated
   }
 
   let vecAvailable = false;
   try {
-    vecAvailable = setupVec(sqlite);
+    vecAvailable = await setupVec(client);
   } catch {
     // Defense-in-depth — setupVec has its own try/catch
   }
 
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // May fail on some platforms; non-critical
+  if (isLocal) {
+    try {
+      const dbPath = url.replace(/^file:/, "");
+      chmodSync(dbPath, 0o600);
+    } catch {
+      // May fail on some platforms; non-critical
+    }
   }
 
-  const db = drizzle(sqlite, { schema });
+  const db = drizzle(client, { schema });
 
-  return { db, sqlite, vecAvailable };
+  return { db, client, vecAvailable };
 }
 
-export function bumpLastModified(sqlite: Database.Database): void {
-  sqlite
-    .prepare(`INSERT OR REPLACE INTO engrams_meta (key, value) VALUES ('last_modified', ?)`)
-    .run(new Date().toISOString());
+export async function bumpLastModified(client: Client): Promise<void> {
+  await client.execute({
+    sql: `INSERT OR REPLACE INTO engrams_meta (key, value) VALUES ('last_modified', ?)`,
+    args: [new Date().toISOString()],
+  });
 }

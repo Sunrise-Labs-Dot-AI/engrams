@@ -9,8 +9,7 @@ import {
   applyCorrect,
   applyMistake,
 } from "@engrams/core";
-import type { EngramsDatabase } from "@engrams/core";
-import type Database from "better-sqlite3";
+import type { EngramsDatabase, Client } from "@engrams/core";
 
 function generateId(): string {
   return randomBytes(16).toString("hex");
@@ -42,7 +41,7 @@ function parseBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 
 export function startHttpApi(
   db: EngramsDatabase,
-  sqlite: Database.Database,
+  client: Client,
   port = 3838,
 ) {
   const server = createServer(async (req, res) => {
@@ -63,7 +62,7 @@ export function startHttpApi(
       const confirmMatch = url.match(/^\/api\/memory\/([^/]+)\/confirm$/);
       if (confirmMatch && req.method === "POST") {
         const id = confirmMatch[1];
-        const existing = db
+        const existing = await db
           .select()
           .from(memories)
           .where(and(eq(memories.id, id), isNull(memories.deletedAt)))
@@ -72,7 +71,7 @@ export function startHttpApi(
 
         const newConfidence = applyConfirm(existing.confidence);
         const timestamp = now();
-        db.update(memories)
+        await db.update(memories)
           .set({
             confidence: newConfidence,
             confirmedCount: existing.confirmedCount + 1,
@@ -81,7 +80,7 @@ export function startHttpApi(
           .where(eq(memories.id, id))
           .run();
 
-        db.insert(memoryEvents)
+        await db.insert(memoryEvents)
           .values({
             id: generateId(),
             memoryId: id,
@@ -104,7 +103,7 @@ export function startHttpApi(
         const content = body.content as string;
         if (!content) return json(res, { error: "content required" }, 400);
 
-        const existing = db
+        const existing = await db
           .select()
           .from(memories)
           .where(and(eq(memories.id, id), isNull(memories.deletedAt)))
@@ -113,7 +112,7 @@ export function startHttpApi(
 
         const newConfidence = applyCorrect();
         const timestamp = now();
-        db.update(memories)
+        await db.update(memories)
           .set({
             content,
             confidence: newConfidence,
@@ -122,7 +121,7 @@ export function startHttpApi(
           .where(eq(memories.id, id))
           .run();
 
-        db.insert(memoryEvents)
+        await db.insert(memoryEvents)
           .values({
             id: generateId(),
             memoryId: id,
@@ -141,7 +140,7 @@ export function startHttpApi(
       const flagMatch = url.match(/^\/api\/memory\/([^/]+)\/flag$/);
       if (flagMatch && req.method === "POST") {
         const id = flagMatch[1];
-        const existing = db
+        const existing = await db
           .select()
           .from(memories)
           .where(and(eq(memories.id, id), isNull(memories.deletedAt)))
@@ -150,7 +149,7 @@ export function startHttpApi(
 
         const newConfidence = applyMistake(existing.confidence);
         const timestamp = now();
-        db.update(memories)
+        await db.update(memories)
           .set({
             confidence: newConfidence,
             mistakeCount: existing.mistakeCount + 1,
@@ -158,7 +157,7 @@ export function startHttpApi(
           .where(eq(memories.id, id))
           .run();
 
-        db.insert(memoryEvents)
+        await db.insert(memoryEvents)
           .values({
             id: generateId(),
             memoryId: id,
@@ -178,12 +177,12 @@ export function startHttpApi(
       if (deleteMatch && req.method === "POST") {
         const id = deleteMatch[1];
         const timestamp = now();
-        db.update(memories)
+        await db.update(memories)
           .set({ deletedAt: timestamp })
           .where(eq(memories.id, id))
           .run();
 
-        db.insert(memoryEvents)
+        await db.insert(memoryEvents)
           .values({
             id: generateId(),
             memoryId: id,
@@ -210,7 +209,7 @@ export function startHttpApi(
         if (Object.keys(updates).length === 0)
           return json(res, { error: "No fields" }, 400);
 
-        db.update(memories).set(updates).where(eq(memories.id, id)).run();
+        await db.update(memories).set(updates).where(eq(memories.id, id)).run();
         return json(res, { id, updated: true });
       }
 
@@ -222,7 +221,7 @@ export function startHttpApi(
         const canRead = body.canRead !== false ? 1 : 0;
         const canWrite = body.canWrite !== false ? 1 : 0;
 
-        const existing = db
+        const existing = await db
           .select()
           .from(agentPermissions)
           .where(
@@ -234,7 +233,7 @@ export function startHttpApi(
           .get();
 
         if (existing) {
-          db.update(agentPermissions)
+          await db.update(agentPermissions)
             .set({ canRead, canWrite })
             .where(
               and(
@@ -244,7 +243,7 @@ export function startHttpApi(
             )
             .run();
         } else {
-          db.insert(agentPermissions)
+          await db.insert(agentPermissions)
             .values({ agentId, domain, canRead, canWrite })
             .run();
         }
@@ -259,7 +258,7 @@ export function startHttpApi(
         const domain = body.domain as string;
         if (!agentId || !domain) return json(res, { error: "agentId and domain required" }, 400);
 
-        db.delete(agentPermissions)
+        await db.delete(agentPermissions)
           .where(
             and(
               eq(agentPermissions.agentId, agentId),
@@ -274,7 +273,10 @@ export function startHttpApi(
       // POST /api/clear-all
       if (url === "/api/clear-all" && req.method === "POST") {
         const timestamp = now();
-        sqlite.prepare(`UPDATE memories SET deleted_at = ? WHERE deleted_at IS NULL`).run(timestamp);
+        await client.execute({
+          sql: `UPDATE memories SET deleted_at = ? WHERE deleted_at IS NULL`,
+          args: [timestamp],
+        });
         return json(res, { cleared: true });
       }
 

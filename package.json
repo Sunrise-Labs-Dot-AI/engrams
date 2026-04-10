@@ -6,6 +6,7 @@
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",
+    "eval": "turbo run eval",
     "dev": "turbo run dev",
     "lint": "turbo run lint"
   },
@@ -15,11 +16,9 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "better-sqlite3",
       "esbuild",
       "onnxruntime-node",
-      "protobufjs",
-      "sqlite-vec"
+      "protobufjs"
     ]
   },
   "dependencies": {

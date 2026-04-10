@@ -12,7 +12,7 @@ export default defineConfig([
   {
     entry: ["src/index.ts"],
     format: ["esm"],
-    dts: true,
+    dts: false,
     splitting: false,
     noExternal: ["@engrams/core"],
   },

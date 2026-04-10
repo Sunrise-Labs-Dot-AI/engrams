@@ -10,10 +10,10 @@
     "start": "next start"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.86.1",
     "@clerk/nextjs": "^7.0.12",
     "@engrams/core": "workspace:*",
     "@libsql/client": "^0.17.2",
-    "better-sqlite3": "^12.8.0",
     "clsx": "^2.1.0",
     "d3": "^7.9.0",
     "lucide-react": "^0.511.0",
@@ -24,7 +24,6 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.0",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/d3": "^7.4.3",
     "@types/node": "25.5.2",
     "@types/react": "^19.1.2",

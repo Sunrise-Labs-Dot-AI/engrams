@@ -1,7 +1,10 @@
 "use server";
 
-import { loadCredentials, saveCredentials, initCredentials, deriveKeys, sync } from "@engrams/core";
+import { loadCredentials, saveCredentials, initCredentials, deriveKeys, migrateToCloud, migrateToLocal } from "@engrams/core";
+import { createClient } from "@libsql/client";
 import { scryptSync } from "crypto";
+import { resolve } from "path";
+import { homedir } from "os";
 
 export async function setupPassphrase(passphrase: string): Promise<{ success: boolean; error?: string }> {
   try {
@@ -22,7 +25,6 @@ export async function setupPassphrase(passphrase: string): Promise<{ success: bo
 export async function saveTursoConfig(url: string, token: string): Promise<{ success: boolean; error?: string }> {
   try {
     // Test connection
-    const { createClient } = await import("@libsql/client");
     const client = createClient({ url, authToken: token });
     await client.execute("SELECT 1");
     client.close();
@@ -38,33 +40,39 @@ export async function saveTursoConfig(url: string, token: string): Promise<{ suc
   }
 }
 
-export async function triggerSync(passphrase: string): Promise<{ success: boolean; pushed?: number; pulled?: number; error?: string }> {
+export async function triggerMigration(
+  passphrase: string,
+  direction: "to_cloud" | "to_local",
+): Promise<{ success: boolean; migrated?: number; error?: string }> {
   const creds = loadCredentials();
   if (!creds?.tursoUrl || !creds?.tursoAuthToken) {
-    return { success: false, error: "Cloud sync not configured" };
+    return { success: false, error: "Cloud not configured" };
   }
 
   const salt = Buffer.from(creds.salt, "base64");
   const keys = deriveKeys(passphrase, salt);
 
-  // Get a writable SQLite handle for sync
-  const Database = (await import("better-sqlite3")).default;
-  const { resolve } = await import("path");
-  const { homedir } = await import("os");
-  const sqlite = new Database(resolve(homedir(), ".engrams", "engrams.db"));
-  sqlite.pragma("journal_mode = WAL");
+  const localClient = createClient({
+    url: "file:" + resolve(homedir(), ".engrams", "engrams.db"),
+  });
+  const cloudClient = createClient({
+    url: creds.tursoUrl,
+    authToken: creds.tursoAuthToken,
+  });
 
   try {
-    const result = await sync(sqlite, {
-      tursoUrl: creds.tursoUrl,
-      tursoAuthToken: creds.tursoAuthToken,
-      keys,
-    }, creds.deviceId);
-    return { success: true, pushed: result.pushed, pulled: result.pulled };
+    if (direction === "to_cloud") {
+      const result = await migrateToCloud(localClient, cloudClient, keys.encryptionKey);
+      return { success: true, migrated: result.migrated };
+    } else {
+      const result = await migrateToLocal(cloudClient, localClient, keys.encryptionKey);
+      return { success: true, migrated: result.migrated };
+    }
   } catch (err) {
-    return { success: false, error: err instanceof Error ? err.message : "Sync failed" };
+    return { success: false, error: err instanceof Error ? err.message : "Migration failed" };
   } finally {
-    sqlite.close();
+    localClient.close();
+    cloudClient.close();
   }
 }
 

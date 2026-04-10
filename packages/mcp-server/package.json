@@ -47,14 +47,11 @@
     "@huggingface/transformers": "^3.4.2",
     "@libsql/client": "^0.17.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^12.8.0",
     "drizzle-orm": "^0.45.2",
-    "sqlite-vec": "^0.1.6",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@engrams/core": "workspace:*",
-    "@types/better-sqlite3": "^7.6.13",
     "tsup": "^8.5.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.1"
