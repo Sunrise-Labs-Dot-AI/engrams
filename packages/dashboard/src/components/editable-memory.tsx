@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Check, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface EditableMemoryProps {
   id: string;
@@ -112,13 +114,19 @@ export function EditableMemory({ id, content, detail }: EditableMemoryProps) {
           </button>
         </div>
       ) : (
-        <p
+        <div
           className="mt-2 text-sm text-[var(--color-text-secondary)] group cursor-pointer hover:bg-[var(--color-bg-soft)] rounded-lg px-2 py-1 -mx-2 -my-1 transition-colors"
           onClick={() => setEditingDetail(true)}
         >
-          {detail || <span className="text-[var(--color-text-muted)] italic">Add detail...</span>}
+          {detail ? (
+            <div className="prose-engrams">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail}</ReactMarkdown>
+            </div>
+          ) : (
+            <span className="text-[var(--color-text-muted)] italic">Add detail...</span>
+          )}
           <Pencil size={10} className="inline ml-2 opacity-0 group-hover:opacity-50 transition-opacity" />
-        </p>
+        </div>
       )}
     </div>
   );

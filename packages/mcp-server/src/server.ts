@@ -266,7 +266,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
       sourceAgentName: z.string().describe("Your agent name"),
       sourceType: z.enum(["stated", "inferred", "observed", "cross-agent"]).describe("How this memory was acquired"),
       sourceDescription: z.string().optional().describe("Description of source"),
-      entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact"]).optional().describe("Entity classification. If omitted, auto-classification runs in background."),
+      entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Entity classification. If omitted, auto-classification runs in background."),
       entityName: z.string().optional().describe("Canonical entity name (e.g. 'Sarah Chen', not 'my manager Sarah'). Helps with dedup."),
       structuredData: z.record(z.unknown()).optional().describe("Type-specific structured fields (schema depends on entityType)"),
       force: z.boolean().optional().describe("Deprecated — use resolution: 'keep_both' instead"),
@@ -869,7 +869,7 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
     {
       query: z.string().describe("Search query"),
       domain: z.string().optional().describe("Filter by domain"),
-      entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact"]).optional().describe("Filter by entity type"),
+      entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Filter by entity type"),
       entityName: z.string().optional().describe("Filter by entity name (case-insensitive)"),
       minConfidence: z.number().optional().describe("Minimum confidence threshold"),
       limit: z.number().optional().describe("Max results (default 20)"),
@@ -1626,7 +1626,7 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
     "Browse the user's memories by domain. Use this to show the user what you know about them in a specific area, or to review memories before a task.",
     {
       domain: z.string().optional().describe("Filter by domain"),
-      entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact"]).optional().describe("Filter by entity type"),
+      entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Filter by entity type"),
       entityName: z.string().optional().describe("Filter by entity name (case-insensitive)"),
       sortBy: z.enum(["confidence", "recency"]).optional().describe("Sort order (default: confidence)"),
       limit: z.number().optional().describe("Max results (default 20)"),
@@ -1811,7 +1811,7 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
     "memory_list_entities",
     "List all known entities grouped by type. Useful for discovering what the system knows about people, organizations, projects, etc.",
     {
-      entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact"]).optional().describe("Filter to a specific entity type"),
+      entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Filter to a specific entity type"),
       agentId: z.string().optional().describe("Your agent ID (for permission filtering)"),
     },
     async (params, extra) => {

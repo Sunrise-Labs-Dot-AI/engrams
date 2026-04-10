@@ -15,6 +15,11 @@ const ENTITY_COLORS: Record<string, string> = {
   event: "#fb923c",
   goal: "#f87171",
   fact: "#94a3b8",
+  lesson: "#facc15",
+  routine: "#2dd4bf",
+  skill: "#818cf8",
+  resource: "#a3e635",
+  decision: "#e879f9",
 };
 const DEFAULT_NODE_COLOR = "#64748b";
 
