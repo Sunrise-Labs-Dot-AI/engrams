@@ -28,6 +28,8 @@ import {
   extractEntity,
   applyConfidenceDecay,
   applyTemporalDecay,
+  sweepExpiredMemories,
+  parseTTL,
   deriveKeys,
   loadCredentials,
   saveCredentials,
@@ -38,8 +40,12 @@ import {
   validateExtraction,
   loadConfig,
   saveConfig,
+  contextSearch,
+  getOrGenerateProfile,
+  listProfiles,
+  isProfileStale,
 } from "@engrams/core";
-import type { SourceType, Relationship, EntityType, LLMProvider, Client } from "@engrams/core";
+import type { SourceType, Relationship, EntityType, Permanence, LLMProvider, Client } from "@engrams/core";
 
 function generateId(): string {
   return randomBytes(16).toString("hex");
@@ -77,6 +83,7 @@ export async function startServer(options?: { transport?: Transport; dbUrl?: str
     if (nowMs - lastDecayRun > DECAY_THROTTLE_MS) {
       await applyConfidenceDecay(client, userId);
       await applyTemporalDecay(client, userId);
+      await sweepExpiredMemories(client, userId);
       lastDecayRun = nowMs;
     }
   }
@@ -270,6 +277,8 @@ Organize memories by life domain: general, work, health, finance, relationships,
       entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Entity classification. If omitted, auto-classification runs in background."),
       entityName: z.string().optional().describe("Canonical entity name (e.g. 'Sarah Chen', not 'my manager Sarah'). Helps with dedup."),
       structuredData: z.record(z.unknown()).optional().describe("Type-specific structured fields (schema depends on entityType)"),
+      permanence: z.enum(["canonical", "active", "ephemeral"]).optional().describe("Memory permanence tier. canonical = permanent/decay-immune. ephemeral = auto-expires. active = default."),
+      ttl: z.string().optional().describe("Time-to-live for ephemeral memories (e.g. '1h', '24h', '7d', '30d'). Auto-sets permanence to 'ephemeral'."),
       force: z.boolean().optional().describe("Deprecated — use resolution: 'keep_both' instead"),
       resolution: z.enum(["update", "correct", "add_detail", "keep_both", "skip"]).optional().describe("How to resolve a similarity match"),
       existingMemoryId: z.string().optional().describe("ID of existing memory to act on (required for update/correct/add_detail)"),
@@ -599,7 +608,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
       }
 
       // --- Insert new memory ---
-      const VALID_ENTITY_TYPES = ["person", "organization", "place", "project", "preference", "event", "goal", "fact"];
+      const VALID_ENTITY_TYPES = ["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"];
       if (params.entityType && !VALID_ENTITY_TYPES.includes(params.entityType)) {
         return textResult({ error: `Invalid entity_type: "${params.entityType}". Must be one of: ${VALID_ENTITY_TYPES.join(", ")}` });
       }
@@ -612,6 +621,14 @@ Organize memories by life domain: general, work, health, finance, relationships,
       const piiText = params.content + (params.detail ? " " + params.detail : "");
       const piiMatches = detectSensitiveData(piiText);
       const hasPii = piiMatches.length > 0;
+
+      // Resolve permanence and TTL
+      let permanence: string | null = params.permanence ?? null;
+      let expiresAt: string | null = null;
+      if (params.ttl) {
+        expiresAt = parseTTL(params.ttl);
+        if (!permanence) permanence = "ephemeral";
+      }
 
       await db.insert(memories)
         .values({
@@ -629,6 +646,8 @@ Organize memories by life domain: general, work, health, finance, relationships,
           entityType: params.entityType ?? null,
           entityName: params.entityName ?? null,
           structuredData: params.structuredData ? JSON.stringify(params.structuredData) : null,
+          permanence,
+          expiresAt,
           userId: userId ?? null,
         })
         .run();
@@ -689,12 +708,12 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
             if (!current || current.entity_type) return;
 
-            // Update entity type
+            // Update entity type + summary
             await client.execute({
-              sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ? WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
+              sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ?, summary = COALESCE(?, summary) WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
               args: userId
-                ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), id, userId]
-                : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), id],
+                ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, id, userId]
+                : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, id],
             });
 
             // Auto-create suggested connections
@@ -791,10 +810,10 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
                     if (!val.valid) return;
 
                     await client.execute({
-                      sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ? WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
+                      sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ?, summary = COALESCE(?, summary) WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
                       args: userId
-                        ? [ext.entity_type, ext.entity_name, JSON.stringify(ext.structured_data), capturedPartId, userId]
-                        : [ext.entity_type, ext.entity_name, JSON.stringify(ext.structured_data), capturedPartId],
+                        ? [ext.entity_type, ext.entity_name, JSON.stringify(ext.structured_data), ext.summary ?? null, capturedPartId, userId]
+                        : [ext.entity_type, ext.entity_name, JSON.stringify(ext.structured_data), ext.summary ?? null, capturedPartId],
                     });
 
                     for (const conn of ext.suggested_connections) {
@@ -877,6 +896,8 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
       expand: z.boolean().optional().describe("Include connected memories (default true)"),
       maxDepth: z.number().optional().describe("Max graph expansion depth (default 3)"),
       similarityThreshold: z.number().optional().describe("Min similarity for connected memories (default 0.5)"),
+      permanence: z.enum(["canonical", "active", "ephemeral", "archived"]).optional().describe("Filter by permanence tier"),
+      includeArchived: z.boolean().optional().describe("Include archived memories in results (default false)"),
       agentId: z.string().optional().describe("Your agent ID (for permission filtering)"),
     },
     async (params, extra) => {
@@ -909,6 +930,15 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
             searchResults = searchResults.filter(r => !blockSet.has(r.memory.domain as string));
           }
         }
+      }
+
+      // Filter by permanence tier
+      if (params.permanence) {
+        searchResults = searchResults.filter(r => (r.memory.permanence as string | null) === params.permanence);
+      }
+      // Exclude archived by default unless explicitly requested
+      if (!params.includeArchived && !params.permanence) {
+        searchResults = searchResults.filter(r => (r.memory.permanence as string | null) !== "archived");
       }
 
       if (searchResults.length === 0) {
@@ -948,6 +978,104 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
         totalConnected: searchResults.reduce((sum, r) => sum + r.connected.length, 0),
         cached: wasCached,
       });
+    },
+  );
+
+  server.tool(
+    "memory_context",
+    "Token-budget-aware context search optimized for LLM consumption. Returns the most relevant memories packed into a specified token budget, organized hierarchically (full detail → summaries → references) or as a narrative prose block. Use this instead of memory_search when you need dense, well-structured context that fits within a token limit.",
+    {
+      query: z.string().describe("Search query"),
+      token_budget: z.number().optional().describe("Max tokens for the result (default 2000)"),
+      format: z.enum(["hierarchical", "narrative"]).optional().describe("Output format: 'hierarchical' (structured tiers) or 'narrative' (prose block). Default: hierarchical"),
+      domain: z.string().optional().describe("Filter by domain"),
+      entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Filter by entity type"),
+      entityName: z.string().optional().describe("Filter by entity name"),
+      minConfidence: z.number().optional().describe("Minimum confidence threshold"),
+      includeArchived: z.boolean().optional().describe("Include archived memories (default false)"),
+      agentId: z.string().optional().describe("Your agent ID (for permission filtering)"),
+    },
+    async (params, extra) => {
+      const userId = getUserId(extra as Record<string, unknown>);
+      await maybeRunDecay(userId);
+
+      const result = await contextSearch(client, params.query, {
+        userId,
+        tokenBudget: params.token_budget,
+        format: params.format,
+        domain: params.domain,
+        entityType: params.entityType,
+        entityName: params.entityName,
+        minConfidence: params.minConfidence,
+        includeArchived: params.includeArchived,
+      });
+
+      // Auto-track usage for primary memories
+      if (result.meta.format === "hierarchical") {
+        const hier = result as import("@engrams/core").HierarchicalResult;
+        const timestamp = now();
+        for (const mem of hier.primary.memories) {
+          await client.execute({
+            sql: `UPDATE memories SET used_count = used_count + 1, last_used_at = ? WHERE id = ?`,
+            args: [timestamp, mem.id],
+          });
+          await client.execute({
+            sql: `INSERT INTO memory_events (id, memory_id, event_type, timestamp) VALUES (?, ?, 'used', ?)`,
+            args: [generateId(), mem.id, timestamp],
+          });
+        }
+      }
+
+      return textResult(result);
+    },
+  );
+
+  server.tool(
+    "memory_briefing",
+    "Generate or retrieve a pre-computed entity profile — a concise summary paragraph about a person, project, organization, or other entity based on all related memories. Profiles are cached and auto-regenerated when stale (>24h). Use this to get a quick briefing before meetings, when context-switching between projects, or to understand what you know about an entity.",
+    {
+      entity_name: z.string().describe("Entity name to get a profile for (e.g., 'Sarah Chen', 'Project Alpha')"),
+      entity_type: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Entity type filter (optional — inferred from memories if omitted)"),
+      regenerate: z.boolean().optional().describe("Force regenerate the profile even if cached (default false)"),
+    },
+    async (params, extra) => {
+      const userId = getUserId(extra as Record<string, unknown>);
+
+      const analysisProvider = resolveLLMProvider("analysis");
+      if (!analysisProvider && !params.regenerate) {
+        // Try to return cached profile without LLM
+        const { getProfile } = await import("@engrams/core");
+        const cached = await getProfile(client, params.entity_name, params.entity_type, userId);
+        if (cached) return textResult(cached);
+        return textResult({ error: "No LLM provider configured and no cached profile exists. Set ANTHROPIC_API_KEY or configure a provider via memory_configure." });
+      }
+
+      const shouldRegenerate = params.regenerate === true;
+      const profile = await getOrGenerateProfile(
+        client,
+        analysisProvider,
+        params.entity_name,
+        params.entity_type,
+        { regenerate: shouldRegenerate, userId: userId ?? undefined },
+      );
+
+      if (!profile) {
+        return textResult({ error: `No memories found for entity "${params.entity_name}"` });
+      }
+
+      // Check staleness and auto-regenerate if needed
+      if (!shouldRegenerate && isProfileStale(profile) && analysisProvider) {
+        const refreshed = await getOrGenerateProfile(
+          client,
+          analysisProvider,
+          params.entity_name,
+          params.entity_type,
+          { regenerate: true, userId: userId ?? undefined },
+        );
+        if (refreshed) return textResult(refreshed);
+      }
+
+      return textResult(profile);
     },
   );
 
@@ -1629,6 +1757,8 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
       domain: z.string().optional().describe("Filter by domain"),
       entityType: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Filter by entity type"),
       entityName: z.string().optional().describe("Filter by entity name (case-insensitive)"),
+      permanence: z.enum(["canonical", "active", "ephemeral", "archived"]).optional().describe("Filter by permanence tier"),
+      includeArchived: z.boolean().optional().describe("Include archived memories (default false)"),
       sortBy: z.enum(["confidence", "recency"]).optional().describe("Sort order (default: confidence)"),
       limit: z.number().optional().describe("Max results (default 20)"),
       offset: z.number().optional().describe("Offset for pagination"),
@@ -1657,6 +1787,13 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
       if (params.entityName) {
         query += ` AND entity_name = ? COLLATE NOCASE`;
         queryParams.push(params.entityName);
+      }
+
+      if (params.permanence) {
+        query += ` AND permanence = ?`;
+        queryParams.push(params.permanence);
+      } else if (!params.includeArchived) {
+        query += ` AND (permanence IS NULL OR permanence != 'archived')`;
       }
 
       // Apply read permission filtering
@@ -1757,10 +1894,10 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
           }
 
           await client.execute({
-            sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ? WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
+            sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ?, summary = COALESCE(?, summary) WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
             args: userId
-              ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), mem.id, userId]
-              : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), mem.id],
+              ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, mem.id, userId]
+              : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, mem.id],
           });
 
           // Auto-create connections
@@ -1907,6 +2044,106 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
         canRead: !!canRead,
         canWrite: !!canWrite,
         updated: true,
+      });
+    },
+  );
+
+  // --- Memory Lifecycle ---
+
+  server.tool(
+    "memory_pin",
+    "Pin a memory as canonical — permanent knowledge that is immune to confidence decay. Use for confirmed facts, preferences, skills, or lessons that should never fade.",
+    {
+      id: z.string().describe("Memory ID to pin"),
+      agentId: z.string().optional().describe("Your agent ID"),
+      agentName: z.string().optional().describe("Your agent name"),
+    },
+    async (params, extra) => {
+      const userId = getUserId(extra as Record<string, unknown>);
+      const existing = await db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.id, params.id), isNull(memories.deletedAt), userId ? eq(memories.userId, userId) : undefined))
+        .get();
+
+      if (!existing) {
+        return textResult({ error: "Memory not found or deleted" });
+      }
+
+      const newConfidence = Math.max(existing.confidence, 0.95);
+      await db.update(memories)
+        .set({ permanence: "canonical", confidence: newConfidence })
+        .where(eq(memories.id, params.id))
+        .run();
+
+      await db.insert(memoryEvents).values({
+        id: generateId(),
+        memoryId: params.id,
+        eventType: "confidence_changed",
+        agentId: params.agentId ?? null,
+        agentName: params.agentName ?? null,
+        oldValue: JSON.stringify({ permanence: existing.permanence, confidence: existing.confidence }),
+        newValue: JSON.stringify({ permanence: "canonical", confidence: newConfidence }),
+        timestamp: now(),
+        userId: userId ?? null,
+      }).run();
+
+      await bumpLastModified(client);
+
+      return textResult({
+        id: params.id,
+        permanence: "canonical",
+        confidence: newConfidence,
+        message: "Memory pinned as canonical — it will never decay.",
+      });
+    },
+  );
+
+  server.tool(
+    "memory_archive",
+    "Archive a memory — preserves it for reference but deprioritizes it in search results. Confidence is frozen. Use for completed project context or outdated but historically relevant information.",
+    {
+      id: z.string().describe("Memory ID to archive"),
+      agentId: z.string().optional().describe("Your agent ID"),
+      agentName: z.string().optional().describe("Your agent name"),
+    },
+    async (params, extra) => {
+      const userId = getUserId(extra as Record<string, unknown>);
+      const existing = await db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.id, params.id), isNull(memories.deletedAt), userId ? eq(memories.userId, userId) : undefined))
+        .get();
+
+      if (!existing) {
+        return textResult({ error: "Memory not found or deleted" });
+      }
+
+      const timestamp = now();
+      await db.update(memories)
+        .set({ permanence: "archived", archivedAt: timestamp })
+        .where(eq(memories.id, params.id))
+        .run();
+
+      await db.insert(memoryEvents).values({
+        id: generateId(),
+        memoryId: params.id,
+        eventType: "confidence_changed",
+        agentId: params.agentId ?? null,
+        agentName: params.agentName ?? null,
+        oldValue: JSON.stringify({ permanence: existing.permanence }),
+        newValue: JSON.stringify({ permanence: "archived" }),
+        timestamp,
+        userId: userId ?? null,
+      }).run();
+
+      await bumpLastModified(client);
+
+      return textResult({
+        id: params.id,
+        permanence: "archived",
+        archivedAt: timestamp,
+        message: "Memory archived — still searchable with include_archived flag, but deprioritized.",
       });
     },
   );
@@ -2498,10 +2735,10 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
                 if (!validation.valid) continue;
 
                 await client.execute({
-                  sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ? WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
+                  sql: `UPDATE memories SET entity_type = ?, entity_name = ?, structured_data = ?, summary = COALESCE(?, summary) WHERE id = ? AND entity_type IS NULL AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
                   args: userId
-                    ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), id, userId]
-                    : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), id],
+                    ? [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, id, userId]
+                    : [extraction.entity_type, extraction.entity_name, JSON.stringify(extraction.structured_data), extraction.summary ?? null, id],
                 });
 
                 for (const conn of extraction.suggested_connections) {

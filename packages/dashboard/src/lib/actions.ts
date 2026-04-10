@@ -9,6 +9,9 @@ import {
   clearAllMemories as clearAll,
   getMemoryById,
   getMemories,
+  pinMemoryById,
+  archiveMemoryById,
+  restoreMemoryById,
 } from "./db";
 import {
   scanForSuggestions,
@@ -263,6 +266,38 @@ export async function scrubMemoryAction(
   revalidatePath(`/memory/${id}`);
   revalidatePath("/cleanup");
   return { scrubbed: true, memory: { content: redactedContent, detail: redactedDetail } };
+}
+
+export async function pinMemoryAction(id: string) {
+  const userId = await getUserId();
+  await pinMemoryById(id, userId);
+  revalidatePath("/");
+  revalidatePath(`/memory/${id}`);
+}
+
+export async function archiveMemoryAction(id: string) {
+  const userId = await getUserId();
+  await archiveMemoryById(id, userId);
+  revalidatePath("/");
+  revalidatePath("/archive");
+  revalidatePath(`/memory/${id}`);
+}
+
+export async function restoreMemoryAction(id: string) {
+  const userId = await getUserId();
+  await restoreMemoryById(id, userId);
+  revalidatePath("/");
+  revalidatePath("/archive");
+  revalidatePath(`/memory/${id}`);
+}
+
+export async function bulkRestoreAction(ids: string[]) {
+  const userId = await getUserId();
+  const { bulkRestoreMemories } = await import("./db");
+  const restored = await bulkRestoreMemories(ids, userId);
+  revalidatePath("/");
+  revalidatePath("/archive");
+  return { restored };
 }
 
 export { type CleanupSuggestion } from "./cleanup";

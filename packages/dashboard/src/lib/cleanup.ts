@@ -35,7 +35,7 @@ function detectPii(text: string): string[] {
 
 // --- Types ---
 
-export type SuggestionType = "merge" | "split" | "contradiction" | "stale" | "update" | "pii";
+export type SuggestionType = "merge" | "split" | "contradiction" | "stale" | "update" | "pii" | "promote" | "expired" | "stale_project";
 
 export interface CleanupSuggestion {
   type: SuggestionType;
@@ -291,6 +291,69 @@ function findPiiMemories(memories: MemoryRow[]): CleanupSuggestion[] {
   return results;
 }
 
+/** Promote to canonical: confirmed 3+ times, confidence >= 0.95, not already canonical */
+function findPromoteCandidates(memories: MemoryRow[]): CleanupSuggestion[] {
+  return memories
+    .filter(
+      (m) =>
+        m.confirmed_count >= 3 &&
+        m.confidence >= 0.95 &&
+        m.permanence !== "canonical",
+    )
+    .map((m) => ({
+      type: "promote" as const,
+      memoryIds: [m.id],
+      description: `Confirmed ${m.confirmed_count}x with ${(m.confidence * 100).toFixed(0)}% confidence — candidate for canonical status`,
+      proposedAction: "Pin as canonical (decay-immune permanent knowledge)",
+      memories: [{ id: m.id, content: m.content, detail: m.detail, domain: m.domain, confidence: m.confidence, entity_type: m.entity_type }],
+      expanded: true,
+    }));
+}
+
+/** Expired ephemeral: past TTL, should be cleaned up */
+function findExpiredEphemeral(memories: MemoryRow[]): CleanupSuggestion[] {
+  const now = new Date().toISOString();
+  return memories
+    .filter(
+      (m) =>
+        m.expires_at !== null &&
+        m.expires_at < now &&
+        m.permanence === "ephemeral",
+    )
+    .map((m) => ({
+      type: "expired" as const,
+      memoryIds: [m.id],
+      description: `Ephemeral memory expired — TTL passed`,
+      proposedAction: "Delete expired memory",
+      memories: [{ id: m.id, content: m.content, detail: m.detail, domain: m.domain, confidence: m.confidence, entity_type: m.entity_type }],
+      expanded: true,
+    }));
+}
+
+/** Stale project context: project-type entity, 90+ days idle, offer archive */
+function findStaleProjectContext(memories: MemoryRow[]): CleanupSuggestion[] {
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+  return memories
+    .filter(
+      (m) =>
+        m.entity_type === "project" &&
+        m.permanence !== "archived" &&
+        m.permanence !== "canonical" &&
+        m.used_count === 0 &&
+        m.confirmed_count === 0 &&
+        m.learned_at !== null &&
+        m.learned_at < ninetyDaysAgo,
+    )
+    .map((m) => ({
+      type: "stale_project" as const,
+      memoryIds: [m.id],
+      description: `Project context idle for 90+ days, never used or confirmed`,
+      proposedAction: "Archive to keep but deprioritize, or delete",
+      memories: [{ id: m.id, content: m.content, detail: m.detail, domain: m.domain, confidence: m.confidence, entity_type: m.entity_type }],
+      expanded: true,
+    }));
+}
+
 // --- Health Score ---
 
 function computeHealthScore(memories: MemoryRow[], suggestions: CleanupSuggestion[]): HealthScore {
@@ -378,11 +441,14 @@ function computeHealthScore(memories: MemoryRow[], suggestions: CleanupSuggestio
 
 const TYPE_PRIORITY: Record<SuggestionType, number> = {
   pii: 0,
-  contradiction: 1,
-  merge: 2,
-  split: 3,
-  stale: 4,
-  update: 5,
+  expired: 1,
+  contradiction: 2,
+  merge: 3,
+  split: 4,
+  stale: 5,
+  stale_project: 6,
+  promote: 7,
+  update: 8,
 };
 
 export interface ScanResult {
@@ -405,12 +471,14 @@ export async function scanForSuggestions(userId?: string | null): Promise<ScanRe
 
   const allSuggestions = [
     ...findPiiMemories(memories),
+    ...findExpiredEphemeral(memories),
     ...findDuplicateClusters(memories),
     ...findContradictionCandidates(memories),
     ...findSplitCandidates(memories),
     ...findStale(memories),
+    ...findStaleProjectContext(memories),
+    ...findPromoteCandidates(memories),
   ];
-  // Note: temporal suggestions removed — handled automatically by applyTemporalDecay
 
   allSuggestions.sort((a, b) => TYPE_PRIORITY[a.type] - TYPE_PRIORITY[b.type]);
 
@@ -423,8 +491,8 @@ export async function scanForSuggestions(userId?: string | null): Promise<ScanRe
   // Splits with 3+ sentences may need review
   // Stale items are auto-handled by decay — only surface if severely stale
   const actionable = allSuggestions
-    .filter(s => s.type === "pii" || s.type === "contradiction" || s.type === "merge" || s.type === "split" || s.type === "stale")
-    .slice(0, 8); // Max 8 actionable items (PII gets priority via sort order)
+    .filter(s => s.type === "pii" || s.type === "expired" || s.type === "contradiction" || s.type === "merge" || s.type === "split" || s.type === "stale" || s.type === "stale_project" || s.type === "promote")
+    .slice(0, 10); // Max 10 actionable items (PII/expired get priority via sort order)
 
   return { health, actionable, allSuggestions };
 }

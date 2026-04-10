@@ -29,7 +29,23 @@ const CREATE_TABLES_SQL = `
     learned_at TEXT,
     confirmed_at TEXT,
     last_used_at TEXT,
-    deleted_at TEXT
+    deleted_at TEXT,
+    summary TEXT,
+    permanence TEXT,
+    expires_at TEXT,
+    archived_at TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS memory_summaries (
+    id TEXT PRIMARY KEY,
+    entity_name TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    memory_ids TEXT NOT NULL,
+    token_count INTEGER NOT NULL,
+    generated_at TEXT NOT NULL,
+    user_id TEXT,
+    UNIQUE(entity_name, entity_type, user_id)
   );
 
   CREATE TABLE IF NOT EXISTS memory_connections (
@@ -189,6 +205,33 @@ async function runMigrations(client: Client): Promise<void> {
     await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_memories_user_id ON memories(user_id)`, args: [] });
     await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash)`, args: [] });
     await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id)`, args: [] });
+  });
+
+  await runMigration(client, "add_permanence_columns", async () => {
+    await client.executeMultiple(`
+      ALTER TABLE memories ADD COLUMN permanence TEXT;
+      ALTER TABLE memories ADD COLUMN expires_at TEXT;
+      ALTER TABLE memories ADD COLUMN archived_at TEXT;
+    `);
+    await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_memories_permanence ON memories(permanence) WHERE deleted_at IS NULL`, args: [] });
+    await client.execute({ sql: `CREATE INDEX IF NOT EXISTS idx_memories_expires_at ON memories(expires_at) WHERE deleted_at IS NULL AND expires_at IS NOT NULL`, args: [] });
+  });
+
+  await runMigration(client, "add_summary_and_profiles", async () => {
+    await client.execute({ sql: `ALTER TABLE memories ADD COLUMN summary TEXT`, args: [] });
+    await client.executeMultiple(`
+      CREATE TABLE IF NOT EXISTS memory_summaries (
+        id TEXT PRIMARY KEY,
+        entity_name TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        memory_ids TEXT NOT NULL,
+        token_count INTEGER NOT NULL,
+        generated_at TEXT NOT NULL,
+        user_id TEXT,
+        UNIQUE(entity_name, entity_type, user_id)
+      );
+    `);
   });
 
   await runMigration(client, "fts_add_entity_name", async () => {

@@ -9,6 +9,7 @@ export type NewMemoryConnection = typeof memoryConnections.$inferInsert;
 export type AgentPermission = typeof agentPermissions.$inferSelect;
 
 export type SourceType = "stated" | "inferred" | "observed" | "cross-agent";
+export type Permanence = "canonical" | "active" | "ephemeral" | "archived";
 export type Relationship =
   | "influences"
   | "supports"

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle, AlertTriangle, Trash2, Pencil, Scissors } from "lucide-react";
+import { CheckCircle, AlertTriangle, Trash2, Pencil, Scissors, Star, Archive, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import {
@@ -12,6 +12,9 @@ import {
   deleteMemoryAction,
   proposeSplitAction,
   confirmSplitAction,
+  pinMemoryAction,
+  archiveMemoryAction,
+  restoreMemoryAction,
 } from "@/lib/actions";
 import type { SplitPart } from "@/lib/actions";
 
@@ -19,9 +22,10 @@ interface MemoryActionsProps {
   id: string;
   currentContent: string;
   currentDetail: string | null;
+  permanence: string | null;
 }
 
-export function MemoryActions({ id, currentContent, currentDetail }: MemoryActionsProps) {
+export function MemoryActions({ id, currentContent, currentDetail, permanence }: MemoryActionsProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [correctModalOpen, setCorrectModalOpen] = useState(false);
@@ -129,6 +133,39 @@ export function MemoryActions({ id, currentContent, currentDetail }: MemoryActio
           <Scissors size={14} className="mr-1" />
           Split
         </Button>
+        {permanence !== "canonical" && (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={loading}
+            onClick={() => handleAction(() => pinMemoryAction(id))}
+          >
+            <Star size={14} className="mr-1" />
+            Pin as Canonical
+          </Button>
+        )}
+        {permanence !== "archived" && (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={loading}
+            onClick={() => handleAction(() => archiveMemoryAction(id))}
+          >
+            <Archive size={14} className="mr-1" />
+            Archive
+          </Button>
+        )}
+        {(permanence === "canonical" || permanence === "archived") && (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={loading}
+            onClick={() => handleAction(() => restoreMemoryAction(id))}
+          >
+            <RotateCcw size={14} className="mr-1" />
+            Restore to Active
+          </Button>
+        )}
         <Button
           variant="danger"
           size="sm"

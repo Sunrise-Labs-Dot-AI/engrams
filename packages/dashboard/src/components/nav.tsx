@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
-import { Brain, Network, Shield, Settings, Sparkles } from "lucide-react";
+import { Archive, Brain, Network, Shield, Settings, Sparkles } from "lucide-react";
 import { UserButton } from "@clerk/nextjs";
 
 const links = [
   { href: "/", label: "Memories", icon: Brain },
+  { href: "/archive", label: "Archive", icon: Archive },
   { href: "/graph", label: "Graph", icon: Network },
   { href: "/cleanup", label: "Cleanup", icon: Sparkles },
   { href: "/agents", label: "Agents", icon: Shield },

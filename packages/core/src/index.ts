@@ -7,6 +7,8 @@ export { generateEmbedding, generateEmbeddings, getEmbedder, backfillEmbeddings,
 export { setupVec, insertEmbedding, deleteEmbedding, searchVec } from "./vec.js";
 export { hybridSearch } from "./search.js";
 export type { SearchResult, ExpandedResult } from "./search.js";
+export { contextSearch } from "./context-packing.js";
+export type { ContextPackedResult, HierarchicalResult, NarrativeResult, ContextMemory, ContextSummary, ContextReference, EntityProfileSummary } from "./context-packing.js";
 export { bumpLastModified } from "./db.js";
 export { detectSensitiveData, redactSensitiveData } from "./pii.js";
 export type { PiiMatch } from "./pii.js";
@@ -17,6 +19,8 @@ export type { EncryptionKeys } from "./crypto.js";
 export { loadCredentials, saveCredentials, initCredentials, loadConfig, saveConfig } from "./credentials.js";
 export type { Credentials, EngramsConfig } from "./credentials.js";
 export { migrateToCloud, migrateToLocal } from "./migrate.js";
+export { getOrGenerateProfile, getProfile, isProfileStale, listProfiles } from "./entity-profiles.js";
+export type { EntityProfile } from "./entity-profiles.js";
 export { createLLMProvider } from "./llm.js";
 export type { LLMProvider, LLMConfig, LLMOptions, LLMTask } from "./llm.js";
 export { parseLLMJson } from "./llm-utils.js";
