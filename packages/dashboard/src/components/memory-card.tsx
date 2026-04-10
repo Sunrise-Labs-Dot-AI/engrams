@@ -13,12 +13,15 @@ import {
   ChevronUp,
   ExternalLink,
   ShieldAlert,
+  Star,
+  Clock,
+  Archive,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { ConfidenceBar } from "@/components/confidence-bar";
-import { confirmMemoryAction, deleteMemoryAction } from "@/lib/actions";
+import { confirmMemoryAction, deleteMemoryAction, pinMemoryAction, archiveMemoryAction } from "@/lib/actions";
 import { formatDate, sourceTypeLabel } from "@/lib/utils";
 import type { MemoryRow } from "@/lib/db";
 
@@ -53,6 +56,24 @@ export function MemoryCard({ memory: m }: MemoryCardProps) {
             <StatusBadge variant="neutral">
               {sourceTypeLabel(m.source_type)}
             </StatusBadge>
+            {m.permanence === "canonical" && (
+              <StatusBadge variant="accent">
+                <Star size={10} className="mr-0.5 inline fill-current" />
+                Canonical
+              </StatusBadge>
+            )}
+            {m.permanence === "ephemeral" && (
+              <StatusBadge variant="warning">
+                <Clock size={10} className="mr-0.5 inline" />
+                Ephemeral
+              </StatusBadge>
+            )}
+            {m.permanence === "archived" && (
+              <StatusBadge variant="neutral">
+                <Archive size={10} className="mr-0.5 inline" />
+                Archived
+              </StatusBadge>
+            )}
             {m.entity_type && (
               <StatusBadge variant="neutral">
                 {m.entity_type}{m.entity_name ? `: ${m.entity_name}` : ""}
@@ -122,6 +143,28 @@ export function MemoryCard({ memory: m }: MemoryCardProps) {
                 Correct
               </Button>
             </Link>
+            {m.permanence !== "canonical" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={loading}
+                onClick={() => handleAction(() => pinMemoryAction(m.id))}
+              >
+                <Star size={14} className="mr-1" />
+                Pin
+              </Button>
+            )}
+            {m.permanence !== "archived" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={loading}
+                onClick={() => handleAction(() => archiveMemoryAction(m.id))}
+              >
+                <Archive size={14} className="mr-1" />
+                Archive
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

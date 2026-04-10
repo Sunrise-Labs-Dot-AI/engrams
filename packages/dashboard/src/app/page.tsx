@@ -19,6 +19,7 @@ interface PageProps {
     entity?: string;
     minConf?: string;
     maxConf?: string;
+    permanence?: string;
     unused?: string;
     review?: string;
   }>;
@@ -71,6 +72,7 @@ export default async function HomePage({ searchParams }: PageProps) {
     entityType: params.entity,
     minConfidence: params.minConf ? parseFloat(params.minConf) : undefined,
     maxConfidence: params.maxConf ? parseFloat(params.maxConf) : undefined,
+    permanence: params.permanence,
     unused: params.unused === "1",
     needsReview: params.review === "1",
   }, userId);

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, ShieldAlert } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Star, Clock, Archive } from "lucide-react";
 import { getMemoryById, getMemoryEvents, getMemoryConnections } from "@/lib/db";
 import { getUserId } from "@/lib/auth";
 import {
@@ -50,6 +50,24 @@ export default async function MemoryDetailPage({ params }: PageProps) {
             <StatusBadge variant="neutral">
               {sourceTypeLabel(memory.source_type)}
             </StatusBadge>
+            {memory.permanence === "canonical" && (
+              <StatusBadge variant="accent">
+                <Star size={12} className="mr-0.5 inline fill-current" />
+                Canonical
+              </StatusBadge>
+            )}
+            {memory.permanence === "ephemeral" && (
+              <StatusBadge variant="warning">
+                <Clock size={12} className="mr-0.5 inline" />
+                Ephemeral
+              </StatusBadge>
+            )}
+            {memory.permanence === "archived" && (
+              <StatusBadge variant="neutral">
+                <Archive size={12} className="mr-0.5 inline" />
+                Archived
+              </StatusBadge>
+            )}
             {memory.entity_type && (
               <StatusBadge variant="neutral">
                 {memory.entity_type}{memory.entity_name ? `: ${memory.entity_name}` : ""}
@@ -110,7 +128,7 @@ export default async function MemoryDetailPage({ params }: PageProps) {
 
         <Card className="p-4">
           <h3 className="text-sm font-semibold mb-3">Actions</h3>
-          <MemoryActions id={memory.id} currentContent={memory.content} currentDetail={memory.detail} />
+          <MemoryActions id={memory.id} currentContent={memory.content} currentDetail={memory.detail} permanence={memory.permanence} />
         </Card>
       </div>
 

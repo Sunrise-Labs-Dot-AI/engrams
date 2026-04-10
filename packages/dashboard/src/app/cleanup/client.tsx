@@ -15,6 +15,8 @@ import {
   flagMemoryAction,
   correctMemoryAction,
   scrubMemoryAction,
+  pinMemoryAction,
+  archiveMemoryAction,
 } from "../../lib/actions";
 import type { CleanupSuggestion, HealthScore } from "../../lib/cleanup";
 import {
@@ -29,6 +31,9 @@ import {
   Trash2,
   ShieldAlert,
   ExternalLink,
+  Star,
+  Archive,
+  Clock,
 } from "lucide-react";
 import { confidenceColor, formatConfidence } from "../../lib/utils";
 
@@ -41,6 +46,9 @@ const TYPE_LABELS: Record<CleanupSuggestion["type"], string> = {
   contradiction: "Possible Conflict",
   stale: "Stale",
   update: "May Be Outdated",
+  promote: "Promote to Canonical",
+  expired: "Expired",
+  stale_project: "Stale Project",
 };
 
 const TYPE_BADGE_VARIANT: Record<
@@ -53,6 +61,9 @@ const TYPE_BADGE_VARIANT: Record<
   contradiction: "danger",
   stale: "neutral",
   update: "success",
+  promote: "success",
+  expired: "warning",
+  stale_project: "neutral",
 };
 
 // --- Health Score ---
@@ -626,6 +637,30 @@ export function CleanupClient() {
     }
   }
 
+  async function handleMemoryPin(memoryId: string, index: number) {
+    setActionLoading(memoryId);
+    try {
+      await pinMemoryAction(memoryId);
+      resolve(index, "Pinned as canonical — decay-immune permanent knowledge");
+    } catch {
+      setError("Failed to pin memory");
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  async function handleMemoryArchive(memoryId: string, index: number) {
+    setActionLoading(memoryId);
+    try {
+      await archiveMemoryAction(memoryId);
+      resolve(index, "Archived — preserved but deprioritized in search");
+    } catch {
+      setError("Failed to archive memory");
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
   async function handleMemoryScrub(memoryId: string, index: number) {
     setActionLoading(memoryId);
     try {
@@ -809,6 +844,8 @@ export function CleanupClient() {
                   }
                   onMemoryDelete={(id) => handleMemoryDelete(id, index)}
                   onMemoryScrub={(id) => handleMemoryScrub(id, index)}
+                  onMemoryPin={(id) => handleMemoryPin(id, index)}
+                  onMemoryArchive={(id) => handleMemoryArchive(id, index)}
                   onCorrectToggle={setCorrectingId}
                 />
               );
@@ -839,6 +876,8 @@ function SuggestionCard({
   onMemoryCorrect,
   onMemoryDelete,
   onMemoryScrub,
+  onMemoryPin,
+  onMemoryArchive,
   onCorrectToggle,
 }: {
   suggestion: CleanupSuggestion;
@@ -857,6 +896,8 @@ function SuggestionCard({
   onMemoryCorrect: (id: string, feedback: string) => void;
   onMemoryDelete: (id: string) => void;
   onMemoryScrub: (id: string) => void;
+  onMemoryPin: (id: string) => void;
+  onMemoryArchive: (id: string) => void;
   onCorrectToggle: (id: string | null) => void;
 }) {
   const needsExpand = !suggestion.expanded;
@@ -975,6 +1016,31 @@ function SuggestionCard({
           onCorrect={onMemoryCorrect}
           onFlag={onMemoryFlag}
           onDelete={onMemoryDelete}
+        />
+      )}
+      {suggestion.expanded && suggestion.type === "promote" && (
+        <PromoteDetail
+          suggestion={suggestion}
+          applying={isLoading}
+          onPin={onMemoryPin}
+          onDelete={onMemoryDelete}
+        />
+      )}
+      {suggestion.expanded && suggestion.type === "expired" && (
+        <ExpiredDetail
+          suggestion={suggestion}
+          applying={isLoading}
+          onDelete={onMemoryDelete}
+          onConfirm={onMemoryConfirm}
+        />
+      )}
+      {suggestion.expanded && suggestion.type === "stale_project" && (
+        <StaleProjectDetail
+          suggestion={suggestion}
+          applying={isLoading}
+          onArchive={onMemoryArchive}
+          onDelete={onMemoryDelete}
+          onConfirm={onMemoryConfirm}
         />
       )}
     </Card>
@@ -1369,6 +1435,146 @@ function StaleDetail({
           loading={applying}
         />
       )}
+    </div>
+  );
+}
+
+function PromoteDetail({
+  suggestion,
+  applying,
+  onPin,
+  onDelete,
+}: {
+  suggestion: CleanupSuggestion;
+  applying: boolean;
+  onPin: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const memory = suggestion.memories?.[0];
+  const memoryId = suggestion.memoryIds[0];
+
+  return (
+    <div className="mt-2">
+      {memory && <MemoryMiniCard memory={memory} />}
+      <div className="flex items-center gap-2 mt-2">
+        <Button
+          size="sm"
+          onClick={() => onPin(memoryId)}
+          disabled={applying}
+        >
+          <Star size={14} className="mr-1" />
+          {applying ? "Pinning..." : "Pin as Canonical"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onDelete(memoryId)}
+          disabled={applying}
+          className="text-[var(--color-danger)] hover:text-[var(--color-danger)]"
+        >
+          <Trash2 size={13} className="mr-1" />
+          Delete
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ExpiredDetail({
+  suggestion,
+  applying,
+  onDelete,
+  onConfirm,
+}: {
+  suggestion: CleanupSuggestion;
+  applying: boolean;
+  onDelete: (id: string) => void;
+  onConfirm: (id: string) => void;
+}) {
+  const memory = suggestion.memories?.[0];
+  const memoryId = suggestion.memoryIds[0];
+
+  return (
+    <div className="mt-2">
+      {memory && <MemoryMiniCard memory={memory} />}
+      <p className="text-xs mt-2 mb-2 text-[var(--color-text-muted)]">
+        This ephemeral memory has passed its expiration time.
+      </p>
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="danger"
+          onClick={() => onDelete(memoryId)}
+          disabled={applying}
+        >
+          <Clock size={14} className="mr-1" />
+          {applying ? "Deleting..." : "Delete Expired"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onConfirm(memoryId)}
+          disabled={applying}
+        >
+          <CheckCircle size={13} className="mr-1" />
+          Keep (confirm)
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function StaleProjectDetail({
+  suggestion,
+  applying,
+  onArchive,
+  onDelete,
+  onConfirm,
+}: {
+  suggestion: CleanupSuggestion;
+  applying: boolean;
+  onArchive: (id: string) => void;
+  onDelete: (id: string) => void;
+  onConfirm: (id: string) => void;
+}) {
+  const memory = suggestion.memories?.[0];
+  const memoryId = suggestion.memoryIds[0];
+
+  return (
+    <div className="mt-2">
+      {memory && <MemoryMiniCard memory={memory} />}
+      <p className="text-xs mt-2 mb-2 text-[var(--color-text-muted)]">
+        This project context has been idle for over 90 days with no usage or confirmation.
+      </p>
+      <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          onClick={() => onArchive(memoryId)}
+          disabled={applying}
+        >
+          <Archive size={14} className="mr-1" />
+          {applying ? "Archiving..." : "Archive"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onConfirm(memoryId)}
+          disabled={applying}
+        >
+          <CheckCircle size={13} className="mr-1" />
+          Still relevant
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => onDelete(memoryId)}
+          disabled={applying}
+          className="text-[var(--color-danger)] hover:text-[var(--color-danger)]"
+        >
+          <Trash2 size={13} className="mr-1" />
+          Delete
+        </Button>
+      </div>
     </div>
   );
 }

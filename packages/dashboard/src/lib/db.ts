@@ -31,6 +31,9 @@ export interface MemoryRow {
   entity_type: string | null;
   entity_name: string | null;
   structured_data: string | null;
+  permanence: string | null;
+  expires_at: string | null;
+  archived_at: string | null;
 }
 
 export interface EventRow {
@@ -170,6 +173,7 @@ export async function getMemories(opts?: {
   search?: string;
   sourceType?: string;
   entityType?: string;
+  permanence?: string;
   minConfidence?: number;
   maxConfidence?: number;
   unused?: boolean;
@@ -219,6 +223,7 @@ function applyFilters(sql: string, args: (string | number | null)[], opts?: {
   domain?: string;
   sourceType?: string;
   entityType?: string;
+  permanence?: string;
   minConfidence?: number;
   maxConfidence?: number;
   unused?: boolean;
@@ -246,6 +251,10 @@ function applyFilters(sql: string, args: (string | number | null)[], opts?: {
   if (opts?.entityType) {
     sql += ` AND entity_type = ?`;
     args.push(opts.entityType);
+  }
+  if (opts?.permanence) {
+    sql += ` AND permanence = ?`;
+    args.push(opts.permanence);
   }
   if (opts?.needsReview) {
     sql += ` AND confirmed_count = 0 AND source_type = 'inferred'`;
@@ -761,4 +770,109 @@ export async function directUpdateMemory(id: string, content: string, detail: st
     sql: `UPDATE memories SET content = ?, detail = ? WHERE id = ? AND deleted_at IS NULL${uf.clause}`,
     args: [content, detail, id, ...uf.args],
   });
+}
+
+export async function pinMemoryById(id: string, userId?: string | null): Promise<boolean> {
+  const client = getClient();
+  const uf = userFilter(userId);
+  const existing = await client.execute({
+    sql: `SELECT confidence, permanence FROM memories WHERE id = ? AND deleted_at IS NULL${uf.clause}`,
+    args: [id, ...uf.args],
+  });
+  if (existing.rows.length === 0) return false;
+
+  const row = existing.rows[0];
+  const newConfidence = Math.max(row.confidence as number, 0.95);
+  const timestamp = now();
+  await client.execute({
+    sql: `UPDATE memories SET permanence = 'canonical', confidence = ? WHERE id = ?${uf.clause}`,
+    args: [newConfidence, id, ...uf.args],
+  });
+  await client.execute({
+    sql: `INSERT INTO memory_events (id, memory_id, event_type, agent_name, old_value, new_value, timestamp) VALUES (?, ?, 'confidence_changed', 'dashboard', ?, ?, ?)`,
+    args: [generateId(), id, JSON.stringify({ permanence: row.permanence, confidence: row.confidence }), JSON.stringify({ permanence: "canonical", confidence: newConfidence }), timestamp],
+  });
+  return true;
+}
+
+export async function archiveMemoryById(id: string, userId?: string | null): Promise<boolean> {
+  const client = getClient();
+  const uf = userFilter(userId);
+  const existing = await client.execute({
+    sql: `SELECT permanence FROM memories WHERE id = ? AND deleted_at IS NULL${uf.clause}`,
+    args: [id, ...uf.args],
+  });
+  if (existing.rows.length === 0) return false;
+
+  const row = existing.rows[0];
+  const timestamp = now();
+  await client.execute({
+    sql: `UPDATE memories SET permanence = 'archived', archived_at = ? WHERE id = ?${uf.clause}`,
+    args: [timestamp, id, ...uf.args],
+  });
+  await client.execute({
+    sql: `INSERT INTO memory_events (id, memory_id, event_type, agent_name, old_value, new_value, timestamp) VALUES (?, ?, 'confidence_changed', 'dashboard', ?, ?, ?)`,
+    args: [generateId(), id, JSON.stringify({ permanence: row.permanence }), JSON.stringify({ permanence: "archived" }), timestamp],
+  });
+  return true;
+}
+
+export async function getArchivedMemories(opts?: {
+  search?: string;
+  sortBy?: "archived" | "confidence" | "learned";
+}, userId?: string | null): Promise<MemoryRow[]> {
+  const client = getClient();
+  const uf = userFilter(userId);
+
+  let sql: string;
+  const args: (string | number | null)[] = [...uf.args];
+
+  if (opts?.search) {
+    sql = `SELECT * FROM memories WHERE deleted_at IS NULL AND permanence = 'archived' AND content LIKE ?${uf.clause}`;
+    args.splice(0, 0, `%${opts.search}%`);
+  } else {
+    sql = `SELECT * FROM memories WHERE deleted_at IS NULL AND permanence = 'archived'${uf.clause}`;
+  }
+
+  switch (opts?.sortBy) {
+    case "confidence": sql += ` ORDER BY confidence DESC`; break;
+    case "learned": sql += ` ORDER BY learned_at ASC`; break;
+    default: sql += ` ORDER BY archived_at DESC`; break;
+  }
+
+  const result = await client.execute({ sql, args });
+  return Promise.all(result.rows.map(r => decryptRow(r as unknown as MemoryRow)));
+}
+
+export async function bulkRestoreMemories(ids: string[], userId?: string | null): Promise<number> {
+  const client = getClient();
+  const uf = userFilter(userId);
+  let restored = 0;
+  for (const id of ids) {
+    const ok = await restoreMemoryById(id, userId);
+    if (ok) restored++;
+  }
+  return restored;
+}
+
+export async function restoreMemoryById(id: string, userId?: string | null): Promise<boolean> {
+  const client = getClient();
+  const uf = userFilter(userId);
+  const existing = await client.execute({
+    sql: `SELECT permanence FROM memories WHERE id = ? AND deleted_at IS NULL${uf.clause}`,
+    args: [id, ...uf.args],
+  });
+  if (existing.rows.length === 0) return false;
+
+  const row = existing.rows[0];
+  const timestamp = now();
+  await client.execute({
+    sql: `UPDATE memories SET permanence = NULL, archived_at = NULL WHERE id = ?${uf.clause}`,
+    args: [id, ...uf.args],
+  });
+  await client.execute({
+    sql: `INSERT INTO memory_events (id, memory_id, event_type, agent_name, old_value, new_value, timestamp) VALUES (?, ?, 'confidence_changed', 'dashboard', ?, ?, ?)`,
+    args: [generateId(), id, JSON.stringify({ permanence: row.permanence }), JSON.stringify({ permanence: null }), timestamp],
+  });
+  return true;
 }

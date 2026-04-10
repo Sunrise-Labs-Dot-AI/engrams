@@ -7,6 +7,8 @@ export { generateEmbedding, generateEmbeddings, getEmbedder, backfillEmbeddings,
 export { setupVec, insertEmbedding, deleteEmbedding, searchVec } from "./vec.js";
 export { hybridSearch } from "./search.js";
 export type { SearchResult, ExpandedResult } from "./search.js";
+export { contextSearch } from "./context-packing.js";
+export type { ContextPackedResult, HierarchicalResult, NarrativeResult, ContextMemory, ContextSummary, ContextReference } from "./context-packing.js";
 export { bumpLastModified } from "./db.js";
 export { detectSensitiveData, redactSensitiveData } from "./pii.js";
 export type { PiiMatch } from "./pii.js";

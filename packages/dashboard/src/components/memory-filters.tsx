@@ -34,6 +34,7 @@ export function MemoryFilters({ sourceTypes, entityTypes }: MemoryFiltersProps) 
   const activeEntity = searchParams.get("entity") ?? "";
   const activeMinConf = searchParams.get("minConf") ?? "";
   const activeMaxConf = searchParams.get("maxConf") ?? "";
+  const activePermanence = searchParams.get("permanence") ?? "";
   const activeUnused = searchParams.get("unused") === "1";
   const activeReview = searchParams.get("review") === "1";
 
@@ -78,7 +79,7 @@ export function MemoryFilters({ sourceTypes, entityTypes }: MemoryFiltersProps) 
     updateParam("review", activeReview ? null : "1");
   }
 
-  const hasActiveFilters = activeSource || activeEntity || activeMinConf || activeUnused || activeReview;
+  const hasActiveFilters = activeSource || activeEntity || activeMinConf || activeUnused || activeReview || activePermanence;
 
   return (
     <div className="flex items-center gap-3 flex-wrap text-xs">
@@ -155,6 +156,19 @@ export function MemoryFilters({ sourceTypes, entityTypes }: MemoryFiltersProps) 
         </select>
       )}
 
+      {/* Permanence */}
+      <select
+        value={activePermanence}
+        onChange={(e) => updateParam("permanence", e.target.value || null)}
+        className="px-2 py-1 text-xs bg-[var(--color-bg-soft)] border border-[var(--color-border)] rounded-md text-[var(--color-text-secondary)] cursor-pointer focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-solid)]"
+      >
+        <option value="">All tiers</option>
+        <option value="canonical">Canonical</option>
+        <option value="active">Active</option>
+        <option value="ephemeral">Ephemeral</option>
+        <option value="archived">Archived</option>
+      </select>
+
       {/* Unused toggle */}
       <button
         onClick={toggleUnused}
@@ -193,6 +207,7 @@ export function MemoryFilters({ sourceTypes, entityTypes }: MemoryFiltersProps) 
                 params.delete("entity");
                 params.delete("minConf");
                 params.delete("maxConf");
+                params.delete("permanence");
                 params.delete("unused");
                 params.delete("review");
                 router.push(`/?${params.toString()}`);

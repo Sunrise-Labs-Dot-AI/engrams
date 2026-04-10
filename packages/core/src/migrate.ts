@@ -41,8 +41,9 @@ export async function migrateToCloud(
            cross_agent_id, cross_agent_name, source_type, source_description,
            confidence, confirmed_count, corrected_count, mistake_count, used_count,
            learned_at, confirmed_at, last_used_at, deleted_at,
-           has_pii_flag, entity_type, entity_name, structured_data, embedding, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           has_pii_flag, entity_type, entity_name, structured_data,
+           permanence, expires_at, archived_at, embedding, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           mem.id as string, encContent, encDetail,
           mem.domain as string, mem.source_agent_id as string, mem.source_agent_name as string,
@@ -55,6 +56,9 @@ export async function migrateToCloud(
           (mem.last_used_at as string | null) ?? null, (mem.deleted_at as string | null) ?? null,
           (mem.has_pii_flag as number) ?? 0, (mem.entity_type as string | null) ?? null,
           (mem.entity_name as string | null) ?? null, encStructured,
+          (mem.permanence as string | null) ?? null,
+          (mem.expires_at as string | null) ?? null,
+          (mem.archived_at as string | null) ?? null,
           mem.embedding ?? null,
           (mem.updated_at as string | null) ?? null,
         ],
@@ -190,8 +194,9 @@ export async function migrateToLocal(
            cross_agent_id, cross_agent_name, source_type, source_description,
            confidence, confirmed_count, corrected_count, mistake_count, used_count,
            learned_at, confirmed_at, last_used_at, deleted_at,
-           has_pii_flag, entity_type, entity_name, structured_data, embedding, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           has_pii_flag, entity_type, entity_name, structured_data,
+           permanence, expires_at, archived_at, embedding, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           mem.id as string, decContent, decDetail,
           mem.domain as string, mem.source_agent_id as string, mem.source_agent_name as string,
@@ -204,6 +209,9 @@ export async function migrateToLocal(
           (mem.last_used_at as string | null) ?? null, (mem.deleted_at as string | null) ?? null,
           (mem.has_pii_flag as number) ?? 0, (mem.entity_type as string | null) ?? null,
           (mem.entity_name as string | null) ?? null, decStructured,
+          (mem.permanence as string | null) ?? null,
+          (mem.expires_at as string | null) ?? null,
+          (mem.archived_at as string | null) ?? null,
           mem.embedding ?? null,
           (mem.updated_at as string | null) ?? null,
         ],
@@ -316,6 +324,9 @@ async function initSchema(client: Client): Promise<void> {
       entity_type TEXT,
       entity_name TEXT,
       structured_data TEXT,
+      permanence TEXT,
+      expires_at TEXT,
+      archived_at TEXT,
       embedding F32_BLOB(384),
       updated_at TEXT
     );

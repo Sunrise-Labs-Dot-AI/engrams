@@ -24,6 +24,9 @@ export const memories = sqliteTable("memories", {
   entityType: text("entity_type"),
   entityName: text("entity_name"),
   structuredData: text("structured_data"),
+  permanence: text("permanence"),
+  expiresAt: text("expires_at"),
+  archivedAt: text("archived_at"),
   userId: text("user_id"),
   updatedAt: text("updated_at"),
 });
