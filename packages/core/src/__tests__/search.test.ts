@@ -5,13 +5,14 @@ import { tmpdir } from "os";
 import { randomBytes } from "crypto";
 import { createDatabase, bumpLastModified } from "../db.js";
 import { searchFTS } from "../fts.js";
+import type { Client } from "@libsql/client";
 
 function tempDbPath(): string {
   return resolve(tmpdir(), `engrams-test-${randomBytes(8).toString("hex")}.db`);
 }
 
-function insertMemory(
-  sqlite: ReturnType<typeof createDatabase>["sqlite"],
+async function insertMemory(
+  client: Client,
   id: string,
   content: string,
   opts: {
@@ -22,12 +23,10 @@ function insertMemory(
     learnedAt?: string;
   } = {},
 ) {
-  sqlite
-    .prepare(
-      `INSERT INTO memories (id, content, domain, source_agent_id, source_agent_name, source_type, confidence, learned_at, entity_type, entity_name)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  await client.execute({
+    sql: `INSERT INTO memories (id, content, domain, source_agent_id, source_agent_name, source_type, confidence, learned_at, entity_type, entity_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
       id,
       content,
       opts.domain ?? "general",
@@ -38,33 +37,35 @@ function insertMemory(
       opts.learnedAt ?? new Date().toISOString(),
       opts.entityType ?? null,
       opts.entityName ?? null,
-    );
+    ],
+  });
 }
 
-function insertConnection(
-  sqlite: ReturnType<typeof createDatabase>["sqlite"],
+async function insertConnection(
+  client: Client,
   sourceId: string,
   targetId: string,
   relationship: string,
 ) {
-  sqlite
-    .prepare(`INSERT INTO memory_connections (source_memory_id, target_memory_id, relationship) VALUES (?, ?, ?)`)
-    .run(sourceId, targetId, relationship);
+  await client.execute({
+    sql: `INSERT INTO memory_connections (source_memory_id, target_memory_id, relationship) VALUES (?, ?, ?)`,
+    args: [sourceId, targetId, relationship],
+  });
 }
 
 describe("search", () => {
   let dbPath: string;
-  let sqlite: ReturnType<typeof createDatabase>["sqlite"];
+  let client: Client;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dbPath = tempDbPath();
-    const result = createDatabase(dbPath);
-    sqlite = result.sqlite;
+    const result = await createDatabase({ url: "file:" + dbPath });
+    client = result.client;
   });
 
   afterEach(() => {
     try {
-      sqlite.close();
+      client.close();
       if (existsSync(dbPath)) unlinkSync(dbPath);
       if (existsSync(dbPath + "-wal")) unlinkSync(dbPath + "-wal");
       if (existsSync(dbPath + "-shm")) unlinkSync(dbPath + "-shm");
@@ -74,121 +75,135 @@ describe("search", () => {
   });
 
   describe("FTS5 search", () => {
-    it("finds memories by keyword", () => {
-      insertMemory(sqlite, "m1", "TypeScript is my preferred language");
-      insertMemory(sqlite, "m2", "I enjoy morning coffee");
-      insertMemory(sqlite, "m3", "Python is also useful for scripting");
+    it("finds memories by keyword", async () => {
+      await insertMemory(client, "m1", "TypeScript is my preferred language");
+      await insertMemory(client, "m2", "I enjoy morning coffee");
+      await insertMemory(client, "m3", "Python is also useful for scripting");
 
-      const results = searchFTS(sqlite, "TypeScript");
+      const results = await searchFTS(client, "TypeScript");
       expect(results.length).toBe(1);
     });
 
-    it("returns empty for no matches", () => {
-      insertMemory(sqlite, "m1", "Hello world");
-      const results = searchFTS(sqlite, "nonexistent");
+    it("returns empty for no matches", async () => {
+      await insertMemory(client, "m1", "Hello world");
+      const results = await searchFTS(client, "nonexistent");
       expect(results).toEqual([]);
     });
 
-    it("searches entity_name in FTS index", () => {
-      insertMemory(sqlite, "m1", "She is my manager", { entityName: "Sarah Chen" });
-      const results = searchFTS(sqlite, "Sarah Chen");
+    it("searches entity_name in FTS index", async () => {
+      await insertMemory(client, "m1", "She is my manager", { entityName: "Sarah Chen" });
+      const results = await searchFTS(client, "Sarah Chen");
       expect(results.length).toBe(1);
     });
 
-    it("respects limit parameter", () => {
+    it("respects limit parameter", async () => {
       for (let i = 0; i < 10; i++) {
-        insertMemory(sqlite, `m${i}`, `TypeScript tip number ${i}`);
+        await insertMemory(client, `m${i}`, `TypeScript tip number ${i}`);
       }
-      const results = searchFTS(sqlite, "TypeScript", 3);
+      const results = await searchFTS(client, "TypeScript", 3);
       expect(results.length).toBe(3);
     });
   });
 
   describe("entity filters (SQL level)", () => {
-    it("filters by entity_type", () => {
-      insertMemory(sqlite, "m1", "Sarah is my manager", { entityType: "person", entityName: "Sarah" });
-      insertMemory(sqlite, "m2", "Acme Corp builds SaaS", { entityType: "organization", entityName: "Acme" });
-      insertMemory(sqlite, "m3", "I prefer dark mode", { entityType: "preference" });
+    it("filters by entity_type", async () => {
+      await insertMemory(client, "m1", "Sarah is my manager", { entityType: "person", entityName: "Sarah" });
+      await insertMemory(client, "m2", "Acme Corp builds SaaS", { entityType: "organization", entityName: "Acme" });
+      await insertMemory(client, "m3", "I prefer dark mode", { entityType: "preference" });
 
-      const personResults = sqlite
-        .prepare(`SELECT * FROM memories WHERE entity_type = ? AND deleted_at IS NULL`)
-        .all("person") as Record<string, unknown>[];
-      expect(personResults.length).toBe(1);
-      expect(personResults[0].id).toBe("m1");
+      const personResults = await client.execute({
+        sql: `SELECT * FROM memories WHERE entity_type = ? AND deleted_at IS NULL`,
+        args: ["person"],
+      });
+      expect(personResults.rows.length).toBe(1);
+      expect(personResults.rows[0].id).toBe("m1");
     });
 
-    it("filters by entity_name case-insensitively", () => {
-      insertMemory(sqlite, "m1", "Sarah is my manager", { entityType: "person", entityName: "Sarah Chen" });
+    it("filters by entity_name case-insensitively", async () => {
+      await insertMemory(client, "m1", "Sarah is my manager", { entityType: "person", entityName: "Sarah Chen" });
 
-      const results = sqlite
-        .prepare(`SELECT * FROM memories WHERE entity_name = ? COLLATE NOCASE AND deleted_at IS NULL`)
-        .all("sarah chen") as Record<string, unknown>[];
-      expect(results.length).toBe(1);
+      const results = await client.execute({
+        sql: `SELECT * FROM memories WHERE entity_name = ? COLLATE NOCASE AND deleted_at IS NULL`,
+        args: ["sarah chen"],
+      });
+      expect(results.rows.length).toBe(1);
     });
   });
 
   describe("connections", () => {
-    it("stores and retrieves connections between memories", () => {
-      insertMemory(sqlite, "m1", "Sarah is my manager");
-      insertMemory(sqlite, "m2", "Acme Corp is my employer");
-      insertConnection(sqlite, "m1", "m2", "works_at");
+    it("stores and retrieves connections between memories", async () => {
+      await insertMemory(client, "m1", "Sarah is my manager");
+      await insertMemory(client, "m2", "Acme Corp is my employer");
+      await insertConnection(client, "m1", "m2", "works_at");
 
-      const outgoing = sqlite
-        .prepare(`SELECT * FROM memory_connections WHERE source_memory_id = ?`)
-        .all("m1") as Record<string, unknown>[];
-      expect(outgoing.length).toBe(1);
-      expect(outgoing[0].relationship).toBe("works_at");
+      const outgoing = await client.execute({
+        sql: `SELECT * FROM memory_connections WHERE source_memory_id = ?`,
+        args: ["m1"],
+      });
+      expect(outgoing.rows.length).toBe(1);
+      expect(outgoing.rows[0].relationship).toBe("works_at");
     });
 
-    it("supports multiple relationship types", () => {
-      insertMemory(sqlite, "m1", "Dogs are great pets");
-      insertMemory(sqlite, "m2", "Cats are better pets");
-      insertConnection(sqlite, "m1", "m2", "contradicts");
+    it("supports multiple relationship types", async () => {
+      await insertMemory(client, "m1", "Dogs are great pets");
+      await insertMemory(client, "m2", "Cats are better pets");
+      await insertConnection(client, "m1", "m2", "contradicts");
 
-      insertMemory(sqlite, "m3", "Regular exercise is important");
-      insertMemory(sqlite, "m4", "Morning walks are my favorite");
-      insertConnection(sqlite, "m3", "m4", "supports");
+      await insertMemory(client, "m3", "Regular exercise is important");
+      await insertMemory(client, "m4", "Morning walks are my favorite");
+      await insertConnection(client, "m3", "m4", "supports");
 
-      const all = sqlite.prepare(`SELECT * FROM memory_connections`).all() as Record<string, unknown>[];
-      expect(all.length).toBe(2);
+      const all = await client.execute({ sql: `SELECT * FROM memory_connections`, args: [] });
+      expect(all.rows.length).toBe(2);
     });
 
-    it("follows bidirectional connections", () => {
-      insertMemory(sqlite, "m1", "Memory A");
-      insertMemory(sqlite, "m2", "Memory B");
-      insertConnection(sqlite, "m1", "m2", "related");
+    it("follows bidirectional connections", async () => {
+      await insertMemory(client, "m1", "Memory A");
+      await insertMemory(client, "m2", "Memory B");
+      await insertConnection(client, "m1", "m2", "related");
 
-      const outgoing = sqlite
-        .prepare(`SELECT * FROM memory_connections WHERE source_memory_id = ?`)
-        .all("m1");
-      const incoming = sqlite
-        .prepare(`SELECT * FROM memory_connections WHERE target_memory_id = ?`)
-        .all("m1");
-      expect(outgoing.length).toBe(1);
-      expect(incoming.length).toBe(0);
+      const outgoing = await client.execute({
+        sql: `SELECT * FROM memory_connections WHERE source_memory_id = ?`,
+        args: ["m1"],
+      });
+      const incoming = await client.execute({
+        sql: `SELECT * FROM memory_connections WHERE target_memory_id = ?`,
+        args: ["m1"],
+      });
+      expect(outgoing.rows.length).toBe(1);
+      expect(incoming.rows.length).toBe(0);
 
-      const incomingToM2 = sqlite
-        .prepare(`SELECT * FROM memory_connections WHERE target_memory_id = ?`)
-        .all("m2");
-      expect(incomingToM2.length).toBe(1);
+      const incomingToM2 = await client.execute({
+        sql: `SELECT * FROM memory_connections WHERE target_memory_id = ?`,
+        args: ["m2"],
+      });
+      expect(incomingToM2.rows.length).toBe(1);
     });
   });
 
   describe("engrams_meta for cache invalidation", () => {
-    it("stores last_modified timestamp", () => {
-      const row = sqlite
-        .prepare(`SELECT value FROM engrams_meta WHERE key = 'last_modified'`)
-        .get() as { value: string };
-      expect(row.value).toBeDefined();
+    it("stores last_modified timestamp", async () => {
+      const result = await client.execute({
+        sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+        args: [],
+      });
+      expect(result.rows[0].value).toBeDefined();
     });
 
-    it("updates last_modified on bumpLastModified", () => {
-      const before = (sqlite.prepare(`SELECT value FROM engrams_meta WHERE key = 'last_modified'`).get() as { value: string }).value;
+    it("updates last_modified on bumpLastModified", async () => {
+      const beforeResult = await client.execute({
+        sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+        args: [],
+      });
+      const before = beforeResult.rows[0].value as string;
 
-      // Small delay to ensure different timestamp
-      bumpLastModified(sqlite);
+      await bumpLastModified(client);
 
-      const after = (sqlite.prepare(`SELECT value FROM engrams_meta WHERE key = 'last_modified'`).get() as { value: string }).value;
+      const afterResult = await client.execute({
+        sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+        args: [],
+      });
+      const after = afterResult.rows[0].value as string;
       expect(after).not.toBe(before);
     });
   });

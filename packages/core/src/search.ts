@@ -1,4 +1,4 @@
-import type Database from "better-sqlite3";
+import type { Client } from "@libsql/client";
 import { searchFTS } from "./fts.js";
 import { searchVec } from "./vec.js";
 import { generateEmbedding } from "./embeddings.js";
@@ -22,12 +22,17 @@ export interface ExpandedResult extends SearchResult {
 
 // --- Helpers ---
 
-function getStoredEmbedding(sqlite: Database.Database, memoryId: string): Float32Array | null {
-  const row = sqlite
-    .prepare(`SELECT embedding FROM memory_embeddings WHERE memory_id = ?`)
-    .get(memoryId) as { embedding: Buffer } | undefined;
-  if (!row) return null;
-  return new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4);
+async function getStoredEmbedding(client: Client, memoryId: string): Promise<Float32Array | null> {
+  const result = await client.execute({
+    sql: `SELECT embedding FROM memories WHERE id = ?`,
+    args: [memoryId],
+  });
+  if (result.rows.length === 0) return null;
+  const row = result.rows[0];
+  if (!row.embedding) return null;
+  // libsql returns F32_BLOB as ArrayBuffer
+  const buf = row.embedding as ArrayBuffer;
+  return new Float32Array(buf);
 }
 
 function cosineSimilarity(a: Float32Array, b: Float32Array): number {
@@ -50,20 +55,21 @@ function recencyBoost(learnedAt: string | null): number {
 
 // --- Graph Expansion ---
 
-function expandConnections(
-  sqlite: Database.Database,
+async function expandConnections(
+  client: Client,
   results: SearchResult[],
   queryEmbedding: Float32Array | null,
   maxDepth: number,
   similarityThreshold: number,
-): ExpandedResult[] {
+): Promise<ExpandedResult[]> {
   if (!queryEmbedding) {
     return results.map((r) => ({ ...r, connected: [] }));
   }
 
   const seen = new Set<string>(results.map((r) => r.id));
 
-  return results.map((result) => {
+  const expanded: ExpandedResult[] = [];
+  for (const result of results) {
     const connected: ExpandedResult["connected"] = [];
     const queue: { memoryId: string; depth: number }[] = [{ memoryId: result.id, depth: 0 }];
 
@@ -72,30 +78,33 @@ function expandConnections(
       if (depth >= maxDepth) continue;
 
       // Get outgoing + incoming connections
-      const outgoing = sqlite
-        .prepare(
-          `SELECT mc.target_memory_id as id, mc.relationship, m.*
-           FROM memory_connections mc
-           JOIN memories m ON m.id = mc.target_memory_id
-           WHERE mc.source_memory_id = ? AND m.deleted_at IS NULL`,
-        )
-        .all(memoryId) as (Record<string, unknown> & { id: string; relationship: string })[];
+      const outgoingResult = await client.execute({
+        sql: `SELECT mc.target_memory_id as id, mc.relationship, m.*
+             FROM memory_connections mc
+             JOIN memories m ON m.id = mc.target_memory_id
+             WHERE mc.source_memory_id = ? AND m.deleted_at IS NULL`,
+        args: [memoryId],
+      });
 
-      const incoming = sqlite
-        .prepare(
-          `SELECT mc.source_memory_id as id, mc.relationship, m.*
-           FROM memory_connections mc
-           JOIN memories m ON m.id = mc.source_memory_id
-           WHERE mc.target_memory_id = ? AND m.deleted_at IS NULL`,
-        )
-        .all(memoryId) as (Record<string, unknown> & { id: string; relationship: string })[];
+      const incomingResult = await client.execute({
+        sql: `SELECT mc.source_memory_id as id, mc.relationship, m.*
+             FROM memory_connections mc
+             JOIN memories m ON m.id = mc.source_memory_id
+             WHERE mc.target_memory_id = ? AND m.deleted_at IS NULL`,
+        args: [memoryId],
+      });
 
-      for (const conn of [...outgoing, ...incoming]) {
+      const allConns = [
+        ...outgoingResult.rows.map((r) => r as unknown as Record<string, unknown> & { id: string; relationship: string }),
+        ...incomingResult.rows.map((r) => r as unknown as Record<string, unknown> & { id: string; relationship: string }),
+      ];
+
+      for (const conn of allConns) {
         if (seen.has(conn.id)) continue;
         seen.add(conn.id);
 
         // Check semantic similarity to query
-        const embedding = getStoredEmbedding(sqlite, conn.id);
+        const embedding = await getStoredEmbedding(client, conn.id);
         if (!embedding) continue;
 
         const similarity = cosineSimilarity(queryEmbedding, embedding);
@@ -119,8 +128,10 @@ function expandConnections(
       return (a.memory.id as string).localeCompare(b.memory.id as string);
     });
 
-    return { ...result, connected };
-  });
+    expanded.push({ ...result, connected });
+  }
+
+  return expanded;
 }
 
 // --- Result Cache ---
@@ -130,7 +141,7 @@ const resultCache = new Map<string, { results: ExpandedResult[]; lastModified: s
 // --- Main Search ---
 
 export async function hybridSearch(
-  sqlite: Database.Database,
+  client: Client,
   query: string,
   options: {
     domain?: string;
@@ -151,40 +162,43 @@ export async function hybridSearch(
 
   // --- Check result cache ---
   const cacheKey = JSON.stringify({ query, ...options });
-  const currentLastModified = sqlite
-    .prepare(`SELECT value FROM engrams_meta WHERE key = 'last_modified'`)
-    .get() as { value: string } | undefined;
+  const currentLastModifiedResult = await client.execute({
+    sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+    args: [],
+  });
+  const currentLastModified = currentLastModifiedResult.rows[0] as unknown as { value: string } | undefined;
 
   const cachedEntry = resultCache.get(cacheKey);
   if (cachedEntry && cachedEntry.lastModified === currentLastModified?.value) {
     return { results: cachedEntry.results, cached: true };
   }
 
-  // 1. FTS5 keyword search → resolve rowids to memory IDs
+  // 1. FTS5 keyword search -> resolve rowids to memory IDs
   const ftsIds: string[] = [];
   try {
-    const ftsResults = searchFTS(sqlite, query, fetchLimit);
+    const ftsResults = await searchFTS(client, query, fetchLimit);
     if (ftsResults.length > 0) {
       const rowids = ftsResults.map((r) => r.rowid);
       const placeholders = rowids.map(() => "?").join(",");
-      const rows = sqlite
-        .prepare(`SELECT id FROM memories WHERE rowid IN (${placeholders}) AND deleted_at IS NULL`)
-        .all(...rowids) as { id: string }[];
-      ftsIds.push(...rows.map((r) => r.id));
+      const rowsResult = await client.execute({
+        sql: `SELECT id FROM memories WHERE rowid IN (${placeholders}) AND deleted_at IS NULL`,
+        args: rowids,
+      });
+      ftsIds.push(...rowsResult.rows.map((r) => r.id as string));
     }
   } catch {
     // FTS5 failure — continue with vector search only
   }
 
-  // 2. Vector similarity search (if sqlite-vec is available)
+  // 2. Vector similarity search (if libsql vector is available)
   const vecIds: string[] = [];
   let queryEmbedding: Float32Array | null = null;
   try {
     queryEmbedding = await generateEmbedding(query);
-    const vecResults = searchVec(sqlite, queryEmbedding, fetchLimit);
+    const vecResults = await searchVec(client, queryEmbedding, fetchLimit);
     vecIds.push(...vecResults.map((r) => r.memory_id));
   } catch {
-    // Embedding or sqlite-vec not available — FTS5 only
+    // Embedding or vector search not available — FTS5 only
   }
 
   // 3. Reciprocal Rank Fusion
@@ -200,14 +214,16 @@ export async function hybridSearch(
 
   // 4. Apply confidence weighting and recency boost
   for (const [id, rawScore] of scores.entries()) {
-    const mem = sqlite
-      .prepare(`SELECT confidence, learned_at FROM memories WHERE id = ? AND deleted_at IS NULL`)
-      .get(id) as { confidence: number; learned_at: string | null } | undefined;
+    const memResult = await client.execute({
+      sql: `SELECT confidence, learned_at FROM memories WHERE id = ? AND deleted_at IS NULL`,
+      args: [id],
+    });
+    const mem = memResult.rows[0] as unknown as { confidence: number; learned_at: string | null } | undefined;
     if (mem) {
       // Confidence boost: 0.5x (confidence=0) to 1.0x (confidence=1.0)
-      const confidenceBoost = 0.5 + mem.confidence * 0.5;
+      const confidenceBoost = 0.5 + (mem.confidence as number) * 0.5;
       // Recency boost: 1.1x (today) to 1.0x (30+ days)
-      const recency = recencyBoost(mem.learned_at);
+      const recency = recencyBoost(mem.learned_at as string | null);
       scores.set(id, rawScore * confidenceBoost * recency);
     }
   }
@@ -246,7 +262,11 @@ export async function hybridSearch(
     params.push(options.minConfidence);
   }
 
-  const rows = sqlite.prepare(sql).all(...params) as Record<string, unknown>[];
+  const rowsResult = await client.execute({
+    sql,
+    args: params as Array<string | number | null>,
+  });
+  const rows = rowsResult.rows as unknown as Record<string, unknown>[];
 
   // Preserve RRF ranking order
   const rowMap = new Map(rows.map((r) => [r.id as string, r]));
@@ -261,7 +281,7 @@ export async function hybridSearch(
   // 6. Graph expansion
   let expandedResults: ExpandedResult[];
   if (expand) {
-    expandedResults = expandConnections(sqlite, searchResults, queryEmbedding, maxDepth, similarityThreshold);
+    expandedResults = await expandConnections(client, searchResults, queryEmbedding, maxDepth, similarityThreshold);
   } else {
     expandedResults = searchResults.map((r) => ({ ...r, connected: [] }));
   }

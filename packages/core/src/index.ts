@@ -16,11 +16,11 @@ export { encrypt, decrypt, deriveKeys, generateSalt, encryptMemory, decryptMemor
 export type { EncryptionKeys } from "./crypto.js";
 export { loadCredentials, saveCredentials, initCredentials, loadConfig, saveConfig } from "./credentials.js";
 export type { Credentials, EngramsConfig } from "./credentials.js";
-export { sync, initRemoteSchema, pushChanges, pullChanges } from "./sync.js";
-export type { SyncConfig, SyncResult } from "./sync.js";
+export { migrateToCloud, migrateToLocal } from "./migrate.js";
 export { createLLMProvider } from "./llm.js";
 export type { LLMProvider, LLMConfig, LLMOptions, LLMTask } from "./llm.js";
 export { parseLLMJson } from "./llm-utils.js";
 export { resolveLLMProvider, requireLLMProvider } from "./llm-config.js";
 export { validateExtraction, validateSplit, validateCorrection, checkSemanticPreservation } from "./llm-validation.js";
 export type { ValidationResult } from "./llm-validation.js";
+export type { Client } from "@libsql/client";

@@ -59,6 +59,6 @@ For structured_data, include relevant fields:
 - goal: what, timeline, status (active/achieved/abandoned)
 - fact: category`;
 
-  const text = await provider.complete(prompt, { maxTokens: 500, json: true });
+  const text = await provider.complete(prompt, { maxTokens: 1024, json: true });
   return parseLLMJson<ExtractionResult>(text);
 }

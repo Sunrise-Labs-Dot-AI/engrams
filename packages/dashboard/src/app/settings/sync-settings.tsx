@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Cloud, Key, Lock, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { setupPassphrase, saveTursoConfig, triggerSync } from "./sync-actions";
+import { setupPassphrase, saveTursoConfig, triggerMigration } from "./sync-actions";
 
 interface SyncStatus {
   hasPassphrase: boolean;
@@ -56,12 +56,12 @@ export function SyncSettings({ syncStatus }: { syncStatus: SyncStatus }) {
     if (!syncPassphrase) return;
     setLoading("sync");
     setMessage(null);
-    const result = await triggerSync(syncPassphrase);
+    const result = await triggerMigration(syncPassphrase, "to_cloud");
     if (result.success) {
-      setMessage({ type: "success", text: `Synced: ${result.pushed} pushed, ${result.pulled} pulled` });
+      setMessage({ type: "success", text: `Migrated ${result.migrated} records to cloud` });
       setSyncPassphrase("");
     } else {
-      setMessage({ type: "error", text: result.error ?? "Sync failed" });
+      setMessage({ type: "error", text: result.error ?? "Migration failed" });
     }
     setLoading(null);
   }

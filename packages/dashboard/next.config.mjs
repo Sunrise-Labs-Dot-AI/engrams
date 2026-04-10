@@ -6,7 +6,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   outputFileTracingRoot: resolve(__dirname, "../.."),
-  serverExternalPackages: ["better-sqlite3", "onnxruntime-node", "@huggingface/transformers"],
+  serverExternalPackages: ["onnxruntime-node", "@huggingface/transformers"],
 
   env: {
     NEXT_PUBLIC_CLERK_SIGN_IN_URL: "/sign-in",
@@ -29,8 +29,6 @@ const nextConfig = {
   webpack: (config) => {
     config.externals = [
       ...(config.externals || []),
-      "better-sqlite3",
-      "sqlite-vec",
       "onnxruntime-node",
     ];
     return config;

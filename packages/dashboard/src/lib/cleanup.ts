@@ -1,5 +1,4 @@
-import { getMemories, getReadDb, type MemoryRow } from "./db";
-import type DatabaseType from "better-sqlite3";
+import { getMemories, type MemoryRow } from "./db";
 
 // --- Types ---
 
@@ -93,7 +92,7 @@ function findSplitCandidates(memories: MemoryRow[]): CleanupSuggestion[] {
         description: `Covers ${Math.max(sentences.length, semicolons.length)} topics — may be better as separate memories`,
         proposedAction: "Click expand to see proposed split",
         memories: [{ id: m.id, content: m.content, detail: m.detail, domain: m.domain, confidence: m.confidence }],
-        expanded: false, // needs LLM to propose parts
+        expanded: false,
       });
     }
   }
@@ -101,84 +100,59 @@ function findSplitCandidates(memories: MemoryRow[]): CleanupSuggestion[] {
 }
 
 /**
- * Duplicate clusters: use embeddings (cosine similarity) to find groups of
- * near-identical memories. Requires sqlite-vec extension loaded on the DB.
+ * Duplicate clusters: text-based bigram Jaccard similarity to find
+ * near-identical memories. Works in both local and hosted modes.
  */
 function findDuplicateClusters(memories: MemoryRow[]): CleanupSuggestion[] {
-  let db: DatabaseType.Database;
-  try {
-    db = getReadDb();
-  } catch {
-    return []; // Not available in hosted mode
+  if (memories.length < 2) return [];
+
+  function bigrams(text: string): Set<string> {
+    const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    const set = new Set<string>();
+    for (let i = 0; i < words.length - 1; i++) {
+      set.add(words[i] + " " + words[i + 1]);
+    }
+    return set;
   }
 
-  // Check if memory_embeddings table exists and has data
-  let hasVec = false;
-  try {
-    const row = db.prepare(`SELECT COUNT(*) as c FROM memory_embeddings`).get() as { c: number } | undefined;
-    hasVec = !!row && row.c > 0;
-  } catch {
-    // sqlite-vec not loaded or table doesn't exist
+  function jaccard(a: Set<string>, b: Set<string>): number {
+    if (a.size === 0 || b.size === 0) return 0;
+    let intersection = 0;
+    for (const item of a) {
+      if (b.has(item)) intersection++;
+    }
+    return intersection / (a.size + b.size - intersection);
   }
 
-  if (!hasVec) return [];
+  const memBigrams = memories.map(m => ({
+    id: m.id,
+    bigrams: bigrams(m.content + (m.detail ? " " + m.detail : "")),
+  }));
 
-  // Load sqlite-vec extension so we can query
-  try {
-    const sqliteVec = require("sqlite-vec");
-    sqliteVec.load(db);
-  } catch {
-    return []; // Can't load extension — skip vector-based dedup
-  }
-
-  // For each memory, find its nearest neighbor by cosine distance
-  const memMap = new Map(memories.map((m) => [m.id, m]));
   const clustered = new Set<string>();
   const results: CleanupSuggestion[] = [];
 
-  for (const m of memories) {
-    if (clustered.has(m.id)) continue;
+  for (let i = 0; i < memBigrams.length; i++) {
+    if (clustered.has(memBigrams[i].id)) continue;
 
-    let neighbors: { memory_id: string; distance: number }[];
-    try {
-      neighbors = db
-        .prepare(
-          `SELECT e2.memory_id, vec_distance_cosine(e1.embedding, e2.embedding) as distance
-           FROM memory_embeddings e1, memory_embeddings e2
-           WHERE e1.memory_id = ? AND e2.memory_id != e1.memory_id AND distance < 0.3
-           ORDER BY distance LIMIT 5`,
-        )
-        .all(m.id) as { memory_id: string; distance: number }[];
-    } catch {
-      // Fallback: use MATCH syntax
-      try {
-        const embedding = db
-          .prepare(`SELECT embedding FROM memory_embeddings WHERE memory_id = ?`)
-          .get(m.id) as { embedding: Buffer } | undefined;
-        if (!embedding) continue;
-        neighbors = db
-          .prepare(
-            `SELECT memory_id, distance FROM memory_embeddings WHERE embedding MATCH ? AND memory_id != ? ORDER BY distance LIMIT 5`,
-          )
-          .all(embedding.embedding, m.id) as { memory_id: string; distance: number }[];
-        neighbors = neighbors.filter((n) => n.distance < 0.3);
-      } catch {
-        continue;
+    const cluster: string[] = [];
+    for (let j = i + 1; j < memBigrams.length; j++) {
+      if (clustered.has(memBigrams[j].id)) continue;
+      const similarity = jaccard(memBigrams[i].bigrams, memBigrams[j].bigrams);
+      if (similarity > 0.5) {
+        cluster.push(memBigrams[j].id);
       }
     }
 
-    const cluster = neighbors
-      .filter((n) => memMap.has(n.memory_id) && !clustered.has(n.memory_id))
-      .map((n) => n.memory_id);
-
     if (cluster.length === 0) continue;
 
-    const allIds = [m.id, ...cluster];
+    const allIds = [memBigrams[i].id, ...cluster];
     for (const id of allIds) clustered.add(id);
 
+    const memMap = new Map(memories.map(m => [m.id, m]));
     const clusterMemories = allIds
-      .map((id) => memMap.get(id)!)
-      .map((mem) => ({
+      .map(id => memMap.get(id)!)
+      .map(mem => ({
         id: mem.id,
         content: mem.content,
         detail: mem.detail,
@@ -192,7 +166,7 @@ function findDuplicateClusters(memories: MemoryRow[]): CleanupSuggestion[] {
       description: `${allIds.length} memories express similar information`,
       proposedAction: "Click expand to have Sonnet pick the best version",
       memories: clusterMemories,
-      expanded: false, // needs LLM to pick which to keep
+      expanded: false,
     });
   }
 
@@ -201,30 +175,22 @@ function findDuplicateClusters(memories: MemoryRow[]): CleanupSuggestion[] {
 
 /**
  * Contradiction candidates: within each domain, find memory pairs with
- * moderate similarity (0.3-0.6 cosine distance) — similar topic but
- * different enough to potentially conflict.
+ * moderate text similarity — same topic but different enough to potentially conflict.
  */
 function findContradictionCandidates(memories: MemoryRow[]): CleanupSuggestion[] {
-  let db: DatabaseType.Database;
-  try {
-    db = getReadDb();
-  } catch {
-    return []; // Not available in hosted mode
+  function wordSet(text: string): Set<string> {
+    return new Set(text.toLowerCase().split(/\s+/).filter(w => w.length > 3));
   }
 
-  let hasVec = false;
-  try {
-    const row = db.prepare(`SELECT COUNT(*) as c FROM memory_embeddings`).get() as { c: number } | undefined;
-    hasVec = !!row && row.c > 0;
-  } catch {}
+  function wordOverlap(a: Set<string>, b: Set<string>): number {
+    if (a.size === 0 || b.size === 0) return 0;
+    let intersection = 0;
+    for (const item of a) {
+      if (b.has(item)) intersection++;
+    }
+    return intersection / Math.min(a.size, b.size);
+  }
 
-  if (!hasVec) return [];
-
-  const memMap = new Map(memories.map((m) => [m.id, m]));
-  const seen = new Set<string>();
-  const results: CleanupSuggestion[] = [];
-
-  // Group by domain to reduce noise
   const byDomain = new Map<string, MemoryRow[]>();
   for (const m of memories) {
     const arr = byDomain.get(m.domain) || [];
@@ -232,51 +198,38 @@ function findContradictionCandidates(memories: MemoryRow[]): CleanupSuggestion[]
     byDomain.set(m.domain, arr);
   }
 
+  const seen = new Set<string>();
+  const results: CleanupSuggestion[] = [];
+
   for (const [, domainMemories] of byDomain) {
     if (domainMemories.length < 2) continue;
 
-    for (const m of domainMemories) {
-      try {
-        const embedding = db
-          .prepare(`SELECT embedding FROM memory_embeddings WHERE memory_id = ?`)
-          .get(m.id) as { embedding: Buffer } | undefined;
-        if (!embedding) continue;
+    const memWords = domainMemories.map(m => ({
+      mem: m,
+      words: wordSet(m.content + (m.detail ? " " + m.detail : "")),
+    }));
 
-        const neighbors = db
-          .prepare(
-            `SELECT memory_id, distance FROM memory_embeddings WHERE embedding MATCH ? AND memory_id != ? ORDER BY distance LIMIT 10`,
-          )
-          .all(embedding.embedding, m.id) as { memory_id: string; distance: number }[];
+    for (let i = 0; i < memWords.length; i++) {
+      for (let j = i + 1; j < memWords.length; j++) {
+        const key = [memWords[i].mem.id, memWords[j].mem.id].sort().join("|");
+        if (seen.has(key)) continue;
 
+        const overlap = wordOverlap(memWords[i].words, memWords[j].words);
         // Moderate similarity: same topic area but different content
-        const candidates = neighbors.filter(
-          (n) =>
-            n.distance >= 0.3 &&
-            n.distance < 0.6 &&
-            memMap.has(n.memory_id) &&
-            memMap.get(n.memory_id)!.domain === m.domain,
-        );
-
-        for (const c of candidates) {
-          const key = [m.id, c.memory_id].sort().join("|");
-          if (seen.has(key)) continue;
+        if (overlap >= 0.3 && overlap < 0.7) {
           seen.add(key);
-
-          const other = memMap.get(c.memory_id)!;
           results.push({
             type: "contradiction",
-            memoryIds: [m.id, c.memory_id],
-            description: `Same domain ("${m.domain}"), similar topic but different assertions`,
+            memoryIds: [memWords[i].mem.id, memWords[j].mem.id],
+            description: `Same domain ("${memWords[i].mem.domain}"), similar topic but different assertions`,
             proposedAction: "Click expand to check if these conflict",
             memories: [
-              { id: m.id, content: m.content, detail: m.detail, domain: m.domain, confidence: m.confidence },
-              { id: other.id, content: other.content, detail: other.detail, domain: other.domain, confidence: other.confidence },
+              { id: memWords[i].mem.id, content: memWords[i].mem.content, detail: memWords[i].mem.detail, domain: memWords[i].mem.domain, confidence: memWords[i].mem.confidence },
+              { id: memWords[j].mem.id, content: memWords[j].mem.content, detail: memWords[j].mem.detail, domain: memWords[j].mem.domain, confidence: memWords[j].mem.confidence },
             ],
-            expanded: false, // needs LLM to determine if actually contradictory
+            expanded: false,
           });
         }
-      } catch {
-        continue;
       }
     }
   }
