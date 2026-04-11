@@ -974,7 +974,7 @@ async function ensureCleanupTable(client: Client): Promise<void> {
 }
 
 export async function getLastModified(userId?: string | null): Promise<string | null> {
-  const client = getClient();
+  const client = await getClient();
   const key = userId ? `last_modified:${userId}` : "last_modified";
   const result = await client.execute({
     sql: `SELECT value FROM engrams_meta WHERE key = ?`,
@@ -994,7 +994,7 @@ export async function getCachedScanResult(userId?: string | null): Promise<{
   lastModifiedAt: string;
   result: import("./cleanup").ScanResult;
 } | null> {
-  const client = getClient();
+  const client = await getClient();
   const key = userId ? `cleanup_cache:${userId}` : "cleanup_cache:_default";
   const row = await client.execute({
     sql: `SELECT value FROM engrams_meta WHERE key = ?`,
@@ -1013,7 +1013,7 @@ export async function setCachedScanResult(
   lastModifiedAt: string,
   userId?: string | null,
 ): Promise<void> {
-  const client = getClient();
+  const client = await getClient();
   const key = userId ? `cleanup_cache:${userId}` : "cleanup_cache:_default";
   const value = JSON.stringify({
     scannedAt: new Date().toISOString(),
@@ -1033,7 +1033,7 @@ export async function dismissSuggestion(
   resolutionNote?: string,
   userId?: string | null,
 ): Promise<void> {
-  const client = getClient();
+  const client = await getClient();
   await ensureCleanupTable(client);
   const id = generateId();
   const userVal = userId ?? "_default";
@@ -1045,7 +1045,7 @@ export async function dismissSuggestion(
 }
 
 export async function getDismissedKeys(userId?: string | null): Promise<Set<string>> {
-  const client = getClient();
+  const client = await getClient();
   await ensureCleanupTable(client);
   const userVal = userId ?? "_default";
   const result = await client.execute({
