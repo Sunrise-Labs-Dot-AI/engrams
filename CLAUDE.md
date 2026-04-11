@@ -105,7 +105,7 @@ Memories are classified into 13 entity types: `person`, `organization`, `place`,
 
 Entity extraction runs in the background via LLM on every `memory_write` (fire-and-forget). Auto-creates connections between entities (works_at, involves, located_at, part_of, about, informed_by, uses).
 
-## MCP Tools (25)
+## MCP Tools (26)
 
 | Tool | Description |
 |------|-------------|
@@ -131,6 +131,7 @@ Entity extraction runs in the background via LLM on every `memory_write` (fire-a
 | `memory_scrub` | Detect and redact PII patterns |
 | `memory_configure` | Configure LLM provider and model settings |
 | `memory_onboard` | Guided onboarding: scan connected tools → informed interview → seed |
+| `memory_interview` | Agent-driven cleanup + gap-fill: analyzes health, generates targeted question plan |
 | `memory_import` | Batch import from Claude, ChatGPT, Cursor, gitconfig, plaintext |
 | `memory_migrate` | Migrate local memories to cloud (Pro tier) |
 

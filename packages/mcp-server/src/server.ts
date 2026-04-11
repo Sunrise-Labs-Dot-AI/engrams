@@ -2774,6 +2774,567 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
     },
   );
 
+  // --- Interview mode: cleanup + gap-fill ---
+
+  const INTERVIEW_TEMPORAL_PATTERNS = [
+    /\bnext\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month)\b/i,
+    /\bthis\s+(week|month|quarter|sprint)\b/i,
+    /\bcurrently\s/i,
+    /\bright\s+now\b/i,
+    /\bat\s+the\s+moment\b/i,
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(,?\s+20\d{2})?\b/i,
+    /\b20\d{2}-\d{2}-\d{2}\b/,
+    /\btoday\b/i,
+    /\btomorrow\b/i,
+    /\byesterday\b/i,
+  ];
+
+  const INTERVIEW_PII_PATTERNS: { type: string; pattern: RegExp }[] = [
+    { type: "ssn", pattern: /\b\d{3}-\d{2}-\d{4}\b/g },
+    { type: "credit_card", pattern: /\b(?:\d[ -]*?){13,19}\b/g },
+    { type: "api_key", pattern: /\b(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36,}|xoxb-[a-zA-Z0-9-]+|xoxp-[a-zA-Z0-9-]+|AKIA[A-Z0-9]{16}|rk_live_[a-zA-Z0-9]+|rk_test_[a-zA-Z0-9]+|pk_live_[a-zA-Z0-9]+|pk_test_[a-zA-Z0-9]+)\b/g },
+    { type: "email", pattern: /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b/g },
+    { type: "phone", pattern: /(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g },
+    { type: "ip_address", pattern: /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\b/g },
+  ];
+
+  const ENTITY_TYPE_PROMPTS: Record<string, string> = {
+    person: "the key people in your life — colleagues, family, friends",
+    organization: "organizations you're part of or work with",
+    place: "places that matter to you — where you live, work, or frequent",
+    project: "projects you're currently working on",
+    preference: "your preferences — communication style, tools, workflows",
+    event: "upcoming events, deadlines, or milestones",
+    goal: "your current goals — professional or personal",
+    fact: "important facts about yourself or your work",
+    lesson: "lessons you've learned that you want to remember",
+    routine: "your daily or weekly routines",
+    skill: "your skills and areas of expertise",
+    resource: "tools, services, or resources you regularly use",
+    decision: "recent important decisions you've made",
+  };
+
+  const ALL_ENTITY_TYPES = Object.keys(ENTITY_TYPE_PROMPTS);
+
+  function truncate(text: string, max: number): string {
+    if (text.length <= max) return text;
+    return text.slice(0, max) + "...";
+  }
+
+  function detectPiiTypes(text: string): string[] {
+    const types: Set<string> = new Set();
+    for (const { type, pattern } of INTERVIEW_PII_PATTERNS) {
+      pattern.lastIndex = 0;
+      if (type === "credit_card") {
+        let m: RegExpExecArray | null;
+        while ((m = pattern.exec(text)) !== null) {
+          const digits = m[0].replace(/[^0-9]/g, "");
+          if (digits.length >= 13 && digits.length <= 19) types.add(type);
+        }
+      } else if (type === "phone") {
+        let m: RegExpExecArray | null;
+        while ((m = pattern.exec(text)) !== null) {
+          const digits = m[0].replace(/[^0-9]/g, "");
+          if (digits.length >= 10) types.add(type);
+        }
+      } else {
+        if (pattern.test(text)) types.add(type);
+      }
+    }
+    return [...types];
+  }
+
+  interface InterviewItem {
+    priority: number;
+    section: "critical" | "cleanup" | "gaps";
+    question: string;
+    issue: string;
+    memoryIds: string[];
+    action: string;
+  }
+
+  server.tool(
+    "memory_interview",
+    "Generate a targeted interview plan to clean up problematic memories and fill knowledge gaps. Returns a markdown plan the agent executes conversationally — asking the user questions one at a time, then using memory_correct, memory_update, memory_remove, memory_confirm, memory_write, memory_pin, memory_archive, and memory_split to act on answers. Call this when the user asks to review or clean up their memories, or periodically for memory maintenance.",
+    {
+      domain: z.string().optional().describe("Limit analysis to a specific domain"),
+      entity_type: z.enum([
+        "person", "organization", "place", "project", "preference",
+        "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision",
+      ]).optional().describe("Limit analysis to a specific entity type"),
+      entity_name: z.string().optional().describe("Limit analysis to a specific entity"),
+      focus: z.enum(["cleanup", "gaps", "both"]).optional().describe("Focus on cleanup issues, knowledge gaps, or both. Default: both"),
+      max_questions: z.number().optional().describe("Maximum questions to include. Default: 15"),
+    },
+    async (params, extra) => {
+      const userId = getUserId(extra as Record<string, unknown>);
+      const focus = params.focus ?? "both";
+      const maxQ = params.max_questions ?? 15;
+
+      // Build filter clauses
+      const filterClauses: string[] = ["deleted_at IS NULL"];
+      const filterArgs: (string | number)[] = [];
+      if (params.domain) { filterClauses.push("domain = ?"); filterArgs.push(params.domain); }
+      if (params.entity_type) { filterClauses.push("entity_type = ?"); filterArgs.push(params.entity_type); }
+      if (params.entity_name) { filterClauses.push("entity_name = ?"); filterArgs.push(params.entity_name); }
+      if (userId) { filterClauses.push("user_id = ?"); filterArgs.push(userId); }
+      const whereClause = filterClauses.join(" AND ");
+
+      // Base counts
+      const totalRow = (await client.execute({ sql: `SELECT COUNT(*) as count FROM memories WHERE ${whereClause}`, args: filterArgs })).rows[0] as { count: number };
+      const totalMemories = totalRow.count;
+
+      if (totalMemories === 0) {
+        return textResult("# Memory Interview\n\nYour memory database is empty. Run `memory_onboard` first to seed your memories, then come back for interview mode.");
+      }
+
+      const items: InterviewItem[] = [];
+
+      // ========== CLEANUP DETECTION ==========
+      if (focus !== "gaps") {
+        type MemRow = { id: string; content: string; detail: string | null; domain: string; confidence: number; entity_type: string | null; entity_name: string | null; learned_at: string | null; confirmed_count: number; used_count: number; permanence: string | null; expires_at: string | null; has_pii_flag: number; structured_data: string | null };
+
+        // Load memories for JS-side analysis (cap at 500 most recent)
+        const allMems = (await client.execute({
+          sql: `SELECT id, content, detail, domain, confidence, entity_type, entity_name, learned_at, confirmed_count, used_count, permanence, expires_at, has_pii_flag, structured_data FROM memories WHERE ${whereClause} ORDER BY learned_at DESC LIMIT 500`,
+          args: filterArgs,
+        })).rows as unknown as MemRow[];
+
+        // 1. PII exposure (priority 0)
+        for (const m of allMems) {
+          if (m.has_pii_flag) continue;
+          const text = m.content + (m.detail ? " " + m.detail : "");
+          const piiTypes = detectPiiTypes(text);
+          if (piiTypes.length > 0) {
+            items.push({
+              priority: 0,
+              section: "critical",
+              question: `This memory may contain sensitive data (${piiTypes.join(", ")}): "${truncate(m.content, 100)}". Should I redact the sensitive parts or remove this memory entirely?`,
+              issue: "pii",
+              memoryIds: [m.id],
+              action: "memory_scrub to redact, or memory_remove to delete",
+            });
+          }
+        }
+
+        // 2. Expired ephemeral (priority 1)
+        const nowStr = now();
+        for (const m of allMems) {
+          if (m.permanence === "ephemeral" && m.expires_at && m.expires_at < nowStr) {
+            items.push({
+              priority: 1,
+              section: "critical",
+              question: `This temporary memory has expired: "${truncate(m.content, 100)}". Should I delete it or convert it to a permanent memory?`,
+              issue: "expired",
+              memoryIds: [m.id],
+              action: "memory_remove to delete, or memory_update with permanence: 'active' to keep",
+            });
+          }
+        }
+
+        // 3. Contradictions (priority 2) — pairwise word overlap within domain
+        const byDomain = new Map<string, MemRow[]>();
+        for (const m of allMems) {
+          const arr = byDomain.get(m.domain) || [];
+          arr.push(m);
+          byDomain.set(m.domain, arr);
+        }
+
+        function wordSet(text: string, entityName?: string | null): Set<string> {
+          const excludeWords = new Set((entityName ?? "").toLowerCase().split(/\s+/).filter(w => w.length > 0));
+          return new Set(text.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !excludeWords.has(w)));
+        }
+        function wordOverlap(a: Set<string>, b: Set<string>): number {
+          if (a.size === 0 || b.size === 0) return 0;
+          let intersection = 0;
+          for (const item of a) { if (b.has(item)) intersection++; }
+          return intersection / Math.min(a.size, b.size);
+        }
+
+        const contradictionSeen = new Set<string>();
+        for (const [, domainMems] of byDomain) {
+          if (domainMems.length < 2) continue;
+          const memWords = domainMems.map(m => ({
+            mem: m,
+            words: wordSet(m.content + (m.detail ? " " + m.detail : ""), m.entity_name),
+          }));
+          for (let i = 0; i < memWords.length && items.filter(it => it.issue === "contradiction").length < 5; i++) {
+            for (let j = i + 1; j < memWords.length && items.filter(it => it.issue === "contradiction").length < 5; j++) {
+              const key = [memWords[i].mem.id, memWords[j].mem.id].sort().join("|");
+              if (contradictionSeen.has(key)) continue;
+              const overlap = wordOverlap(memWords[i].words, memWords[j].words);
+              if (overlap >= 0.45 && overlap < 0.7) {
+                contradictionSeen.add(key);
+                items.push({
+                  priority: 2,
+                  section: "critical",
+                  question: `I have two memories in "${memWords[i].mem.domain}" that might conflict:\n  1. "${truncate(memWords[i].mem.content, 100)}" (id: ${memWords[i].mem.id})\n  2. "${truncate(memWords[j].mem.content, 100)}" (id: ${memWords[j].mem.id})\nWhich one is correct, or are they both true in different contexts?`,
+                  issue: "contradiction",
+                  memoryIds: [memWords[i].mem.id, memWords[j].mem.id],
+                  action: "memory_correct the wrong one, or memory_confirm both if no conflict",
+                });
+              }
+            }
+          }
+        }
+
+        // 4. Stale temporal references (priority 3)
+        const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+        for (const m of allMems) {
+          if (!m.learned_at || m.learned_at > fourteenDaysAgo) continue;
+          const text = m.content + (m.detail ? " " + m.detail : "");
+          if (INTERVIEW_TEMPORAL_PATTERNS.some(p => p.test(text))) {
+            items.push({
+              priority: 3,
+              section: "cleanup",
+              question: `This memory references a time that may have passed: "${truncate(m.content, 100)}" (learned ${m.learned_at.split("T")[0]}). Is this still accurate, or should I update it?`,
+              issue: "stale_temporal",
+              memoryIds: [m.id],
+              action: "memory_update with current info, or memory_remove if obsolete",
+            });
+          }
+        }
+
+        // 5. Low-confidence unconfirmed (priority 4)
+        for (const m of allMems) {
+          if (m.confidence < 0.5 && m.confirmed_count === 0 && m.used_count === 0) {
+            items.push({
+              priority: 4,
+              section: "cleanup",
+              question: `I'm not very sure about this (${(m.confidence * 100).toFixed(0)}% confidence, never confirmed): "${truncate(m.content, 100)}". Can you confirm this is correct?`,
+              issue: "low_confidence",
+              memoryIds: [m.id],
+              action: "memory_confirm if correct, memory_correct if wrong, memory_remove if irrelevant",
+            });
+          }
+        }
+
+        // 6. Untyped memories (priority 5)
+        const untyped = allMems.filter(m => !m.entity_type);
+        for (const m of untyped.slice(0, 10)) {
+          items.push({
+            priority: 5,
+            section: "cleanup",
+            question: `This memory doesn't have a type assigned: "${truncate(m.content, 100)}". What kind of thing is this — a person, project, preference, fact, or something else?`,
+            issue: "untyped",
+            memoryIds: [m.id],
+            action: "memory_classify to auto-classify, or memory_update to set entity_type manually",
+          });
+        }
+
+        // 7. Split candidates (priority 6)
+        for (const m of allMems) {
+          const text = m.content + (m.detail ? " " + m.detail : "");
+          const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 10);
+          const semicolons = text.split(";").filter(s => s.trim().length > 10);
+          if (sentences.length >= 3 || semicolons.length >= 3) {
+            items.push({
+              priority: 6,
+              section: "cleanup",
+              question: `This memory covers ${Math.max(sentences.length, semicolons.length)} topics: "${truncate(m.content, 100)}". Would you like me to split it into separate memories?`,
+              issue: "split",
+              memoryIds: [m.id],
+              action: "memory_split to break into parts",
+            });
+          }
+        }
+
+        // 8. Stale projects (priority 7)
+        const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+        for (const m of allMems) {
+          if (m.entity_type === "project" && m.permanence !== "archived" && m.permanence !== "canonical" && m.used_count === 0 && m.confirmed_count === 0 && m.learned_at && m.learned_at < ninetyDaysAgo) {
+            items.push({
+              priority: 7,
+              section: "cleanup",
+              question: `Project "${m.entity_name || truncate(m.content, 60)}" hasn't been referenced in 90+ days. Is this still active, or should I archive it?`,
+              issue: "stale_project",
+              memoryIds: [m.id],
+              action: "memory_archive if done, memory_confirm if still active",
+            });
+          }
+        }
+
+        // 9. Promote candidates (priority 8)
+        for (const m of allMems) {
+          if (m.confirmed_count >= 3 && m.confidence >= 0.95 && m.permanence !== "canonical") {
+            items.push({
+              priority: 8,
+              section: "cleanup",
+              question: `"${truncate(m.content, 100)}" has been confirmed ${m.confirmed_count} times with ${(m.confidence * 100).toFixed(0)}% confidence. Should I pin this as permanent canonical knowledge?`,
+              issue: "promote",
+              memoryIds: [m.id],
+              action: "memory_pin to make canonical",
+            });
+          }
+        }
+      }
+
+      // ========== GAP DETECTION ==========
+      if (focus !== "cleanup") {
+        // 1. Entity type coverage (priority 9-10)
+        const entityCounts = (await client.execute({
+          sql: `SELECT entity_type, COUNT(*) as count FROM memories WHERE entity_type IS NOT NULL AND ${whereClause} GROUP BY entity_type`,
+          args: filterArgs,
+        })).rows as unknown as { entity_type: string; count: number }[];
+        const entityMap = Object.fromEntries(entityCounts.map(e => [e.entity_type, e.count]));
+
+        // Don't suggest entity types if we're filtering by entity_type already
+        if (!params.entity_type) {
+          for (const type of ALL_ENTITY_TYPES) {
+            const count = entityMap[type] || 0;
+            if (count === 0) {
+              items.push({
+                priority: 9,
+                section: "gaps",
+                question: `I don't have any ${type} memories yet. Can you tell me about ${ENTITY_TYPE_PROMPTS[type]}?`,
+                issue: "empty_type",
+                memoryIds: [],
+                action: `memory_write with entity_type: "${type}"`,
+              });
+            } else if (count <= 2) {
+              items.push({
+                priority: 10,
+                section: "gaps",
+                question: `I only have ${count} ${type} ${count === 1 ? "memory" : "memories"}. Are there other ${type}s I should know about?`,
+                issue: "thin_type",
+                memoryIds: [],
+                action: `memory_write with entity_type: "${type}"`,
+              });
+            }
+          }
+        }
+
+        // 2. Shallow entities (priority 11)
+        const shallowEntities = (await client.execute({
+          sql: `SELECT entity_type, entity_name, COUNT(*) as count FROM memories WHERE entity_type IS NOT NULL AND entity_name IS NOT NULL AND ${whereClause} GROUP BY entity_type, entity_name HAVING count < 3 ORDER BY count ASC LIMIT 15`,
+          args: filterArgs,
+        })).rows as unknown as { entity_type: string; entity_name: string; count: number }[];
+
+        for (const e of shallowEntities) {
+          items.push({
+            priority: 11,
+            section: "gaps",
+            question: `I only know ${e.count} thing${e.count === 1 ? "" : "s"} about ${e.entity_name} (${e.entity_type}). Can you tell me more?`,
+            issue: "shallow_entity",
+            memoryIds: [],
+            action: `memory_write with entity_name: "${e.entity_name}", entity_type: "${e.entity_type}"`,
+          });
+        }
+
+        // 3. People missing organization (priority 12)
+        const people = (await client.execute({
+          sql: `SELECT entity_name, structured_data FROM memories WHERE entity_type = 'person' AND entity_name IS NOT NULL AND ${whereClause} GROUP BY entity_name`,
+          args: filterArgs,
+        })).rows as unknown as { entity_name: string; structured_data: string | null }[];
+
+        for (const p of people) {
+          if (!p.structured_data) {
+            items.push({
+              priority: 12,
+              section: "gaps",
+              question: `Which organization does ${p.entity_name} work at, and what's their role?`,
+              issue: "missing_crossref",
+              memoryIds: [],
+              action: `memory_update to add structured_data, or memory_write a new connection`,
+            });
+            continue;
+          }
+          try {
+            const data = JSON.parse(p.structured_data);
+            if (!data.organization && !data.relationship_to_user) {
+              items.push({
+                priority: 12,
+                section: "gaps",
+                question: `I know about ${p.entity_name} but not where they work or how they relate to you. Can you fill that in?`,
+                issue: "missing_crossref",
+                memoryIds: [],
+                action: `memory_update to add organization and relationship_to_user`,
+              });
+            }
+          } catch { /* skip unparseable */ }
+        }
+
+        // 4. Thin domains (priority 13)
+        if (!params.domain) {
+          const thinDomains = (await client.execute({
+            sql: `SELECT domain, COUNT(*) as count FROM memories WHERE ${whereClause} GROUP BY domain HAVING count <= 2 ORDER BY count ASC`,
+            args: filterArgs,
+          })).rows as unknown as { domain: string; count: number }[];
+
+          for (const d of thinDomains) {
+            items.push({
+              priority: 13,
+              section: "gaps",
+              question: `The "${d.domain}" domain only has ${d.count} ${d.count === 1 ? "memory" : "memories"}. Is there more to capture here, or is this domain complete?`,
+              issue: "thin_domain",
+              memoryIds: [],
+              action: `memory_write with domain: "${d.domain}", or confirm it's complete`,
+            });
+          }
+        }
+      }
+
+      // ========== COMPUTE HEALTH SCORE ==========
+      const classifiedRow = (await client.execute({ sql: `SELECT COUNT(*) as count FROM memories WHERE entity_type IS NOT NULL AND ${whereClause}`, args: filterArgs })).rows[0] as { count: number };
+      const engagedRow = (await client.execute({ sql: `SELECT COUNT(*) as count FROM memories WHERE (used_count > 0 OR confirmed_count > 0) AND ${whereClause}`, args: filterArgs })).rows[0] as { count: number };
+
+      const piiCount = items.filter(i => i.issue === "pii").length;
+      const contradictionCount = items.filter(i => i.issue === "contradiction").length;
+      const temporalCount = items.filter(i => i.issue === "stale_temporal").length;
+
+      const privacyScore = piiCount === 0 ? 100 : Math.max(0, 100 - piiCount * 25);
+      const uniquenessScore = Math.max(0, 100 - contradictionCount * 15);
+      const classificationScore = totalMemories > 0 ? Math.min(100, (classifiedRow.count / totalMemories) * 120) : 100;
+      const engagementScore = totalMemories > 0 ? Math.min(100, (engagedRow.count / totalMemories) * 200) : 100;
+      const freshnessScore = temporalCount === 0 ? 100 : Math.max(0, 100 - temporalCount * 10);
+      const consistencyScore = Math.max(0, 100 - contradictionCount * 15);
+
+      const healthScore = Math.round(
+        privacyScore * 0.20 +
+        uniquenessScore * 0.20 +
+        classificationScore * 0.10 +
+        engagementScore * 0.15 +
+        freshnessScore * 0.15 +
+        consistencyScore * 0.20
+      );
+
+      // ========== SORT AND CAP ==========
+      items.sort((a, b) => a.priority - b.priority);
+
+      const critical = items.filter(i => i.section === "critical");
+      const cleanup = items.filter(i => i.section === "cleanup");
+      const gaps = items.filter(i => i.section === "gaps");
+
+      // Budget: allocate evenly, flow unused slots
+      let criticalCap = Math.min(5, Math.ceil(maxQ / 3));
+      let cleanupCap = Math.min(5, Math.ceil(maxQ / 3));
+      let gapsCap = Math.min(5, Math.ceil(maxQ / 3));
+
+      const criticalUsed = Math.min(critical.length, criticalCap);
+      const cleanupUsed = Math.min(cleanup.length, cleanupCap);
+      const gapsUsed = Math.min(gaps.length, gapsCap);
+
+      // Redistribute unused slots
+      let remaining = maxQ - criticalUsed - cleanupUsed - gapsUsed;
+      const finalCritical = critical.slice(0, criticalUsed + (cleanup.length <= cleanupUsed && gaps.length <= gapsUsed ? remaining : 0));
+      remaining = maxQ - finalCritical.length;
+      const finalCleanup = cleanup.slice(0, Math.min(cleanup.length, Math.max(cleanupUsed, remaining - Math.min(gaps.length, gapsUsed))));
+      remaining = maxQ - finalCritical.length - finalCleanup.length;
+      const finalGaps = gaps.slice(0, Math.min(gaps.length, remaining));
+
+      const allQuestions = [...finalCritical, ...finalCleanup, ...finalGaps];
+
+      // ========== NO ISSUES CASE ==========
+      if (allQuestions.length === 0) {
+        const scope = [params.domain, params.entity_type, params.entity_name].filter(Boolean).join(", ") || "all memories";
+        return textResult(`# Memory Interview\n\n**Health: ${healthScore}/100** | ${totalMemories} memories | Scope: ${scope}\n\nMemory health looks good! No cleanup issues or knowledge gaps detected. Check back later or run with different filters.`);
+      }
+
+      // ========== BUILD MARKDOWN PLAN ==========
+      const plan: string[] = [];
+      const scope = [params.domain && `domain: ${params.domain}`, params.entity_type && `type: ${params.entity_type}`, params.entity_name && `entity: ${params.entity_name}`].filter(Boolean).join(", ") || "all memories";
+
+      plan.push("# Memory Interview");
+      plan.push("");
+      plan.push(`**Health:** ${healthScore}/100 | **Memories:** ${totalMemories} | **Issues:** ${finalCritical.length + finalCleanup.length} | **Gaps:** ${finalGaps.length} | **Scope:** ${scope}`);
+      plan.push("");
+      plan.push("---");
+      plan.push("");
+      plan.push("## Rules");
+      plan.push("");
+      plan.push("- Ask **ONE question at a time**. Wait for the user's answer before proceeding.");
+      plan.push("- **Act immediately** after each answer using the tool listed in the Action field — don't batch actions.");
+      plan.push("- If the user says \"skip\" or \"I don't know\", move to the next question.");
+      plan.push("- If the user's answer reveals new information not covered in the plan, write it with `memory_write`.");
+      plan.push("- Stop early if the user wants to — this can always be run again later.");
+      plan.push("");
+      plan.push("### Available tools");
+      plan.push("- `memory_confirm` — verify a memory is correct (boosts confidence)");
+      plan.push("- `memory_correct` — fix incorrect content");
+      plan.push("- `memory_update` — change content, detail, domain, or entity type");
+      plan.push("- `memory_remove` — soft-delete a memory");
+      plan.push("- `memory_pin` — promote to permanent canonical status");
+      plan.push("- `memory_archive` — preserve but deprioritize");
+      plan.push("- `memory_split` — break compound memory into parts");
+      plan.push("- `memory_scrub` — redact PII");
+      plan.push("- `memory_write` — create new memories from user answers");
+      plan.push("- `memory_connect` — link related entities");
+
+      let qNum = 0;
+
+      if (finalCritical.length > 0) {
+        plan.push("");
+        plan.push("---");
+        plan.push("");
+        plan.push(`## Section 1: Critical Issues (${finalCritical.length})`);
+        for (const item of finalCritical) {
+          qNum++;
+          plan.push("");
+          plan.push(`### Q${qNum}: ${item.question}`);
+          plan.push(`**Issue:** ${item.issue}${item.memoryIds.length > 0 ? ` | **IDs:** ${item.memoryIds.join(", ")}` : ""} | **Action:** ${item.action}`);
+        }
+      }
+
+      if (finalCleanup.length > 0) {
+        plan.push("");
+        plan.push("---");
+        plan.push("");
+        plan.push(`## Section 2: Cleanup (${finalCleanup.length})`);
+        for (const item of finalCleanup) {
+          qNum++;
+          plan.push("");
+          plan.push(`### Q${qNum}: ${item.question}`);
+          plan.push(`**Issue:** ${item.issue}${item.memoryIds.length > 0 ? ` | **IDs:** ${item.memoryIds.join(", ")}` : ""} | **Action:** ${item.action}`);
+        }
+      }
+
+      if (finalGaps.length > 0) {
+        plan.push("");
+        plan.push("---");
+        plan.push("");
+        plan.push(`## Section 3: Knowledge Gaps (${finalGaps.length})`);
+        for (const item of finalGaps) {
+          qNum++;
+          plan.push("");
+          plan.push(`### Q${qNum}: ${item.question}`);
+          plan.push(`**Gap:** ${item.issue} | **Action:** ${item.action}`);
+        }
+      }
+
+      plan.push("");
+      plan.push("---");
+      plan.push("");
+      plan.push("## Wrap-up");
+      plan.push("");
+      plan.push("After completing the questions above, tell the user:");
+      plan.push("");
+      plan.push(`"We reviewed ${allQuestions.length} items across your memory. You can see the changes at **localhost:3838** — the dashboard shows your full memory graph, and you can make further edits there anytime. Run \\\`memory_interview\\\` again later for another check-up."`);
+
+      // Log the interview event
+      try {
+        await client.execute({
+          sql: `INSERT INTO memory_events (id, memory_id, event_type, agent_id, agent_name, new_value, timestamp) VALUES (?, 'system', 'interview_started', ?, ?, ?, ?)`,
+          args: [
+            generateId(),
+            "unknown",
+            "unknown",
+            JSON.stringify({
+              memory_count: totalMemories,
+              health_score: healthScore,
+              questions: allQuestions.length,
+              focus,
+            }),
+            now(),
+          ],
+        });
+      } catch {
+        // Non-fatal — FK constraint on memory_id='system'
+      }
+
+      return textResult(plan.join("\n"));
+    },
+  );
+
   server.tool(
     "memory_import",
     "Import memories from a known format. Parses the source, deduplicates against existing memories, and writes new ones. Supported sources: engrams (full Engrams JSON export — preserves all metadata faithfully), claude-memory (MEMORY.md files), chatgpt-export (OpenAI memory export JSON), cursorrules (.cursorrules files), gitconfig (.gitconfig), plaintext (one memory per line).",
