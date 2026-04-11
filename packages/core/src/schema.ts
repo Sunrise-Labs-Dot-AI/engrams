@@ -102,3 +102,13 @@ export const apiTokens = sqliteTable("api_tokens", {
   revokedAt: text("revoked_at"),                      // soft revoke
   createdAt: text("created_at").notNull(),
 });
+
+export const cleanupDismissals = sqliteTable("cleanup_dismissals", {
+  id: text("id").primaryKey(),
+  userId: text("user_id"),
+  suggestionKey: text("suggestion_key").notNull(),
+  suggestionType: text("suggestion_type").notNull(),
+  action: text("action").notNull(), // 'dismissed' | 'resolved'
+  resolutionNote: text("resolution_note"),
+  createdAt: text("created_at").notNull(),
+});

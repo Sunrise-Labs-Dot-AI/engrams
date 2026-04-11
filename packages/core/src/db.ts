@@ -234,6 +234,22 @@ async function runMigrations(client: Client): Promise<void> {
     `);
   });
 
+  await runMigration(client, "add_cleanup_dismissals", async () => {
+    await client.executeMultiple(`
+      CREATE TABLE IF NOT EXISTS cleanup_dismissals (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        suggestion_key TEXT NOT NULL,
+        suggestion_type TEXT NOT NULL,
+        action TEXT NOT NULL,
+        resolution_note TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(user_id, suggestion_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_cleanup_dismissals_user ON cleanup_dismissals(user_id);
+    `);
+  });
+
   await runMigration(client, "fts_add_entity_name", async () => {
     // Drop old FTS table and triggers, then recreate with entity_name column
     await client.executeMultiple(`

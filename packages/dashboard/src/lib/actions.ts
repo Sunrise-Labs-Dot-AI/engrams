@@ -18,6 +18,7 @@ import {
   expandMergeSuggestion,
   expandSplitSuggestion,
   expandContradictionSuggestion,
+  suggestionKey,
   type CleanupSuggestion,
   type ScanResult,
 } from "./cleanup";
@@ -156,16 +157,66 @@ export async function clearAllMemoriesAction() {
 
 // --- Cleanup actions ---
 
-/** Scan: algorithmic only, zero API cost. Returns health score + prioritized suggestions. */
-export async function scanCleanupAction(): Promise<
+/** Scan with cache + dismissal filtering. Auto-invalidates when memories change. */
+export async function scanCleanupAction(forceRefresh?: boolean): Promise<
   ScanResult | { error: string }
 > {
   const userId = await getUserId();
   try {
-    return await scanForSuggestions(userId);
+    const { getLastModified, getCachedScanResult, setCachedScanResult, getDismissedKeys } = await import("./db");
+
+    const currentLastModified = await getLastModified(userId);
+    let scanResult: ScanResult;
+
+    if (!forceRefresh) {
+      const cached = await getCachedScanResult(userId);
+      if (cached && cached.lastModifiedAt === currentLastModified) {
+        scanResult = cached.result;
+      } else {
+        scanResult = await scanForSuggestions(userId);
+        if (currentLastModified) {
+          await setCachedScanResult(scanResult, currentLastModified, userId);
+        }
+      }
+    } else {
+      scanResult = await scanForSuggestions(userId);
+      if (currentLastModified) {
+        await setCachedScanResult(scanResult, currentLastModified, userId);
+      }
+    }
+
+    // Filter out dismissed suggestions
+    const dismissedKeys = await getDismissedKeys(userId);
+    if (dismissedKeys.size > 0) {
+      scanResult = {
+        ...scanResult,
+        actionable: scanResult.actionable.filter(s => !dismissedKeys.has(suggestionKey(s))),
+      };
+    }
+
+    return scanResult;
   } catch (e) {
     console.error("[engrams] Cleanup scan failed:", e);
     return { error: "Cleanup scan failed" };
+  }
+}
+
+/** Persist a suggestion dismissal so it doesn't reappear on re-scan. */
+export async function dismissSuggestionAction(
+  suggestionType: string,
+  memoryIds: string[],
+  action: "dismissed" | "resolved" = "dismissed",
+  resolutionNote?: string,
+): Promise<{ ok: true } | { error: string }> {
+  const userId = await getUserId();
+  try {
+    const { dismissSuggestion } = await import("./db");
+    const key = `${suggestionType}:${[...memoryIds].sort().join(",")}`;
+    await dismissSuggestion(key, suggestionType, action, resolutionNote, userId);
+    return { ok: true };
+  } catch (e) {
+    console.error("[engrams] Dismiss suggestion failed:", e);
+    return { error: "Failed to dismiss suggestion" };
   }
 }
 

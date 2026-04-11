@@ -506,6 +506,11 @@ export async function scanForSuggestions(userId?: string | null): Promise<ScanRe
   return { health, actionable, allSuggestions };
 }
 
+/** Stable suggestion identity key for persistence (dismissals, cache) */
+export function suggestionKey(s: CleanupSuggestion): string {
+  return `${s.type}:${[...s.memoryIds].sort().join(",")}`;
+}
+
 // --- LLM expansion (on-demand, per suggestion) ---
 
 import { parseLLMJson } from "@engrams/core";

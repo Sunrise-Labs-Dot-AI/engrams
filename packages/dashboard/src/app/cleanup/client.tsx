@@ -7,6 +7,7 @@ import { Card } from "../../components/ui/card";
 import { StatusBadge } from "../../components/ui/status-badge";
 import {
   scanCleanupAction,
+  dismissSuggestionAction,
   expandSuggestionAction,
   applyMergeSuggestionAction,
   applySplitSuggestionAction,
@@ -521,11 +522,15 @@ export function CleanupClient() {
     new Map(),
   );
 
-  async function handleScan() {
+  useEffect(() => {
+    handleScan(false);
+  }, []);
+
+  async function handleScan(forceRefresh = false) {
     setScanning(true);
     setError(null);
     try {
-      const result = await scanCleanupAction();
+      const result = await scanCleanupAction(forceRefresh);
       if ("error" in result) {
         setError(result.error);
       } else {
@@ -542,15 +547,23 @@ export function CleanupClient() {
   }
 
   const dismiss = useCallback((index: number) => {
+    const suggestion = actionable[index];
+    if (suggestion) {
+      dismissSuggestionAction(suggestion.type, suggestion.memoryIds, "dismissed");
+    }
     setActionable((prev) => prev.filter((_, i) => i !== index));
     setResolved((prev) => {
       const next = new Map(prev);
       next.delete(index);
       return next;
     });
-  }, []);
+  }, [actionable]);
 
   function resolve(index: number, action: string, memory?: { content: string; detail: string | null }) {
+    const suggestion = actionable[index];
+    if (suggestion) {
+      dismissSuggestionAction(suggestion.type, suggestion.memoryIds, "resolved", action);
+    }
     setResolved((prev) => new Map(prev).set(index, { action, memory }));
   }
 
@@ -770,7 +783,7 @@ export function CleanupClient() {
             Monitor quality and resolve issues that need your input
           </p>
         </div>
-        <Button onClick={handleScan} disabled={scanning}>
+        <Button onClick={() => handleScan(true)} disabled={scanning}>
           {scanning ? (
             <>
               <Loader2 size={16} className="animate-spin mr-1.5" />
@@ -779,7 +792,7 @@ export function CleanupClient() {
           ) : (
             <>
               <Search size={16} className="mr-1.5" />
-              Scan
+              Re-scan
             </>
           )}
         </Button>
