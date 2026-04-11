@@ -895,7 +895,7 @@ Each part should have a concise "content" (one sentence) and optional "detail". 
 
   server.tool(
     "memory_index",
-    "Index documents from external data stores (Google Drive, Notion, filesystem, GitHub, etc.) so they can be found via memory_search. You are the crawler — use your existing MCP connections (Drive, Notion, etc.) to read document metadata, then call this tool to store lightweight index entries. Engrams stores the pointer + summary, not the full content. Supports batch indexing up to 100 documents per call. Re-indexing the same location updates the existing entry.",
+    "Index documents from external data stores (Google Drive, Notion, filesystem, GitHub, etc.) so they can be found via memory_search. You are the crawler — use your existing MCP connections (Drive, Notion, etc.) to read document metadata, then call this tool to store lightweight index entries. Engrams stores the pointer + summary, not the full content. Supports batch indexing up to 100 documents per call. Re-indexing the same location updates the existing entry.\n\nBE SELECTIVE: Do not index everything. Before crawling, ask the user which folders, sources, or topics to index. Prefer documents that relate to entities already in memory (use memory_search first to understand what's known). Skip binary files, images, auto-generated files, temp files, and anything the user wouldn't search for by topic. Quality over quantity — 50 well-summarized documents beat 5,000 junk entries. If the user says 'index my Drive', ask which folders or file types matter to them.",
     {
       documents: z.array(z.object({
         title: z.string().describe("Document title"),
