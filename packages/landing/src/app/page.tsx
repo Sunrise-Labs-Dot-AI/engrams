@@ -4,6 +4,7 @@ import { Problem } from "@/components/problem";
 import { Solution } from "@/components/solution";
 import { Tools } from "@/components/tools";
 import { Architecture } from "@/components/architecture";
+import { Deployment } from "@/components/deployment";
 import { Install } from "@/components/install";
 import { Footer } from "@/components/footer";
 
@@ -20,6 +21,8 @@ export default function Home() {
       <Tools />
       <div className="section-divider" />
       <Architecture />
+      <div className="section-divider" />
+      <Deployment />
       <div className="section-divider" />
       <Install />
       <Footer />

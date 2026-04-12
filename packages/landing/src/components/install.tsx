@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import clsx from "clsx";
+import { CodeBlock } from "./code-block";
 
 const clients = [
   {
@@ -66,9 +67,7 @@ export function Install() {
         </p>
 
         {/* Code block */}
-        <pre className="code-block">
-          <code>{config}</code>
-        </pre>
+        <CodeBlock>{config}</CodeBlock>
 
         <p className="text-text-dim text-sm text-center mt-4">
           Same config for every client. Just change the file path.
