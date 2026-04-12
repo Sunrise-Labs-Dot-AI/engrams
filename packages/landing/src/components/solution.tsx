@@ -48,17 +48,30 @@ const features = [
   {
     title: "Connect & Understand",
     description:
-      "Memories form a knowledge graph across 13 entity types. People, projects, and preferences are automatically linked. Entity profiles generate summaries on demand. Contradictions detected.",
+      "Memories are auto-classified into 13 entity types. People, projects, and preferences are automatically linked. Entity profiles generate summaries on demand. Contradictions detected.",
     visual: (
-      <div className="glass p-2 overflow-hidden rounded-xl">
-        <img
-          src="/screenshots/dashboard-graph.png"
-          alt="Knowledge graph showing interconnected entities and relationships"
-          width={1280}
-          height={800}
-          className="rounded-lg w-full h-auto"
-          loading="lazy"
-        />
+      <div className="glass p-6 space-y-3">
+        {[
+          { type: "person", name: "Sarah Chen", detail: "Engineering lead at Acme", confidence: 0.95 },
+          { type: "project", name: "Project Atlas", detail: "Next-gen search platform", confidence: 0.88 },
+          { type: "preference", name: "TypeScript strict mode", detail: "Always enabled in all projects", confidence: 0.99 },
+        ].map((entity) => (
+          <div key={entity.name} className="rounded-lg bg-surface/50 p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 rounded-full bg-glow/10 text-glow">
+                {entity.type}
+              </span>
+              <div>
+                <p className="text-sm font-medium text-text">{entity.name}</p>
+                <p className="text-xs text-text-dim">{entity.detail}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald" />
+              <span className="text-xs text-emerald font-mono">{entity.confidence.toFixed(2)}</span>
+            </div>
+          </div>
+        ))}
       </div>
     ),
   },

@@ -1,4 +1,5 @@
 import { MemoryThreads } from "./memory-threads";
+import { CodeBlock } from "./code-block";
 
 const installConfig = `{
   "mcpServers": {
@@ -34,7 +35,7 @@ export function Hero() {
         </p>
 
         <div className="flex items-center justify-center gap-4 mb-12">
-          <a href="#install" className="btn-glow text-base">
+          <a href="/setup" className="btn-glow text-base">
             Get Started
           </a>
           <a
@@ -48,9 +49,7 @@ export function Hero() {
         </div>
 
         <div className="max-w-lg mx-auto">
-          <pre className="code-block text-left text-sm">
-            <code>{installConfig}</code>
-          </pre>
+          <CodeBlock className="text-left text-sm">{installConfig}</CodeBlock>
           <p className="text-text-dim text-sm mt-3">
             Add to Claude Code, Cursor, Windsurf, or any MCP client. That&rsquo;s it.
           </p>

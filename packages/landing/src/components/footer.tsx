@@ -14,6 +14,13 @@ export function Footer() {
         </a>
         {" · "}
         <a
+          href="/setup"
+          className="text-text-muted hover:text-text transition-colors"
+        >
+          Setup Guide
+        </a>
+        {" · "}
+        <a
           href="https://github.com/Sunrise-Labs-Dot-AI/engrams"
           target="_blank"
           rel="noopener noreferrer"

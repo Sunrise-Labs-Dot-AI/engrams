@@ -5,14 +5,34 @@ export function Header() {
         <a href="/" className="font-mono text-xl font-bold text-glow tracking-tight">
           engrams
         </a>
-        <a
-          href="https://github.com/Sunrise-Labs-Dot-AI/engrams"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-sm text-text-muted hover:text-text transition-colors"
-        >
-          GitHub
-        </a>
+        <nav className="flex items-center gap-2 sm:gap-4">
+          <a
+            href="/setup"
+            className="text-sm text-text-muted hover:text-text transition-colors"
+          >
+            Setup Guide
+          </a>
+          <a
+            href="https://github.com/Sunrise-Labs-Dot-AI/engrams"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-text-muted hover:text-text transition-colors"
+          >
+            GitHub
+          </a>
+          <a
+            href="https://app.getengrams.com/sign-in"
+            className="text-sm text-text-muted hover:text-text transition-colors"
+          >
+            Sign In
+          </a>
+          <a
+            href="https://app.getengrams.com/sign-up"
+            className="btn-glow text-sm !py-1.5 !px-4"
+          >
+            Sign Up
+          </a>
+        </nav>
       </div>
     </header>
   );
