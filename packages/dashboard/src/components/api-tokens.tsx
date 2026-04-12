@@ -14,9 +14,11 @@ import {
 interface Props {
   userId: string;
   tokens: TokenInfo[];
+  isHosted?: boolean;
+  baseUrl?: string;
 }
 
-export function ApiTokens({ userId, tokens }: Props) {
+export function ApiTokens({ userId, tokens, isHosted, baseUrl }: Props) {
   const router = useRouter();
   const [createOpen, setCreateOpen] = useState(false);
   const [newTokenName, setNewTokenName] = useState("Claude Desktop");
@@ -136,11 +138,23 @@ export function ApiTokens({ userId, tokens }: Props) {
       {tokens.length > 0 && (
         <div className="mt-3 rounded border border-[var(--color-border)] bg-[var(--color-bg)] p-3">
           <h4 className="text-xs font-semibold mb-1.5">Connect a remote MCP client</h4>
-          <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
-            Start the server with <code className="font-mono">engrams --serve</code>, then configure your client:
-          </p>
-          <pre className="text-[10px] font-mono bg-black/20 rounded px-2 py-1.5 overflow-x-auto">{`ENGRAMS_MCP_URL=http://<host>:3939/mcp
+          {isHosted ? (
+            <>
+              <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
+                Configure your MCP client with these environment variables:
+              </p>
+              <pre className="text-[10px] font-mono bg-black/20 rounded px-2 py-1.5 overflow-x-auto">{`ENGRAMS_MCP_URL=${baseUrl}/api/mcp
 ENGRAMS_API_KEY=<your-token>`}</pre>
+            </>
+          ) : (
+            <>
+              <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
+                Start the server with <code className="font-mono">engrams --serve</code>, then configure your client:
+              </p>
+              <pre className="text-[10px] font-mono bg-black/20 rounded px-2 py-1.5 overflow-x-auto">{`ENGRAMS_MCP_URL=http://<host>:3939/mcp
+ENGRAMS_API_KEY=<your-token>`}</pre>
+            </>
+          )}
         </div>
       )}
 
