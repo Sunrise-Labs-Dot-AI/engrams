@@ -55,7 +55,7 @@ export default async function SettingsPage() {
 
       {/* API Tokens */}
       <Card className="p-4">
-        <ApiTokensSection userId={isHosted ? userId! : "local"} />
+        <ApiTokensSection userId={isHosted ? userId! : "local"} isHosted={isHosted} baseUrl={process.env.NEXT_PUBLIC_APP_URL || "https://app.getengrams.com"} />
       </Card>
 
       <SettingsActions />
@@ -63,7 +63,7 @@ export default async function SettingsPage() {
   );
 }
 
-async function ApiTokensSection({ userId }: { userId: string }) {
+async function ApiTokensSection({ userId, isHosted, baseUrl }: { userId: string; isHosted: boolean; baseUrl: string }) {
   const tokens = await listApiTokens(userId);
-  return <ApiTokens userId={userId} tokens={tokens} />;
+  return <ApiTokens userId={userId} tokens={tokens} isHosted={isHosted} baseUrl={baseUrl} />;
 }
