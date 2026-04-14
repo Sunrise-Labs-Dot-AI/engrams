@@ -51,7 +51,7 @@
     "directory": "packages/mcp-server"
   },
   "homepage": "https://getengrams.com",
-  "author": "Sunrise Labs <hello@sunrise-labs.ai>",
+  "author": "Sunrise Labs <hello@sunriselabs.ai>",
   "dependencies": {
     "@huggingface/transformers": "^3.4.2",
     "@libsql/client": "^0.17.2",

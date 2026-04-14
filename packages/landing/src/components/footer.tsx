@@ -5,7 +5,7 @@ export function Footer() {
       <p className="text-text-dim text-sm mt-8">
         &copy; 2026{" "}
         <a
-          href="https://sunrise-labs.ai"
+          href="https://sunriselabs.ai"
           target="_blank"
           rel="noopener noreferrer"
           className="text-text-muted hover:text-text transition-colors"

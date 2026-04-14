@@ -1,7 +1,7 @@
 {
   "private": true,
   "license": "MIT",
-  "author": "Sunrise Labs <hello@sunrise-labs.ai>",
+  "author": "Sunrise Labs <hello@sunriselabs.ai>",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "turbo run build",
