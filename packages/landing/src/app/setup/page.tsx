@@ -17,12 +17,46 @@ context. When the user states a preference, corrects an assumption,
 shares personal context, or provides information useful across future
 conversations, save it with memory_write.`;
 
+const claudeCodePrompt = `## Memory — CRITICAL OVERRIDE
+
+**DO NOT use the built-in file-based auto-memory system.** Never create,
+read, or write to \`MEMORY.md\` or any files in the
+\`~/.claude/projects/.../memory/\` directory. That system is fully
+replaced by Engrams.
+
+**USE Engrams MCP tools for ALL persistent memory.** Engrams is the
+single source of truth.
+
+### At conversation start
+- Call \`memory_search\` with terms relevant to the user's request to
+  retrieve prior context
+
+### When to write
+- \`memory_write\` — user states a preference, corrects an assumption,
+  shares personal context, or says anything useful for future conversations
+- \`memory_confirm\` — user validates a recalled fact
+- \`memory_correct\` — user corrects a stored memory
+- \`memory_flag_mistake\` — a memory turns out to be wrong
+
+### When to search
+- \`memory_search\` — before answering questions where prior context
+  would help
+- \`memory_context\` — token-budget-aware retrieval for building responses
+- \`memory_briefing\` — entity summaries (people, projects, etc.)
+
+### Rules
+- Never duplicate memories to both Engrams and the built-in file system
+- Treat Engrams memories as the persistent record — they survive across
+  all MCP-connected tools (Claude Code, Cursor, Windsurf, Claude Desktop)
+- When the user says "remember this," save immediately via \`memory_write\``;
+
 const promptLocations = [
   {
     client: "Claude Code",
-    location: "CLAUDE.md",
+    location: "~/.claude/CLAUDE.md",
     detail:
-      "Add to your project's CLAUDE.md or your global ~/.claude/CLAUDE.md. Claude Code reads this file at the start of every conversation.",
+      "Add to your global ~/.claude/CLAUDE.md (or project CLAUDE.md). Claude Code has a built-in auto-memory system that competes with Engrams — the snippet above explicitly disables it.",
+    useClaudeCodePrompt: true,
   },
   {
     client: "Claude Desktop",
@@ -153,6 +187,14 @@ export default function SetupGuide() {
                     </span>
                   </div>
                   <p className="text-sm text-text-muted">{p.detail}</p>
+                  {"useClaudeCodePrompt" in p && (
+                    <div className="mt-4">
+                      <p className="text-xs font-semibold uppercase tracking-widest text-text-dim mb-2">
+                        Claude Code requires a stronger override
+                      </p>
+                      <CodeBlock className="text-xs">{claudeCodePrompt}</CodeBlock>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
