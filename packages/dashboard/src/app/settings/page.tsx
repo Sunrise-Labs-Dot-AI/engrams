@@ -18,14 +18,14 @@ export default async function SettingsPage() {
   const stats = await getDbStats(userId);
   const dbPath = isHosted
     ? "(hosted — Turso)"
-    : resolve(homedir(), ".engrams", "engrams.db");
+    : resolve(homedir(), ".lodis", "lodis.db");
 
   return (
     <div className="space-y-6">
       <h1 className="text-lg font-semibold">Settings</h1>
 
       {/* Connect to Claude (hosted only) */}
-      {isHosted && <ConnectClaude baseUrl={process.env.NEXT_PUBLIC_APP_URL || "https://app.getengrams.com"} />}
+      {isHosted && <ConnectClaude baseUrl={process.env.NEXT_PUBLIC_APP_URL || "https://app.lodis.ai"} />}
 
       <Card className="p-4">
         <h3 className="text-sm font-semibold mb-3">Database</h3>
@@ -55,7 +55,7 @@ export default async function SettingsPage() {
 
       {/* API Tokens */}
       <Card className="p-4">
-        <ApiTokensSection userId={isHosted ? userId! : "local"} isHosted={isHosted} baseUrl={process.env.NEXT_PUBLIC_APP_URL || "https://app.getengrams.com"} />
+        <ApiTokensSection userId={isHosted ? userId! : "local"} isHosted={isHosted} baseUrl={process.env.NEXT_PUBLIC_APP_URL || "https://app.lodis.ai"} />
       </Card>
 
       <SettingsActions />

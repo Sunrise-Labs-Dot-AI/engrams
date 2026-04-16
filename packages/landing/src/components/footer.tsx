@@ -21,7 +21,7 @@ export function Footer() {
         </a>
         {" · "}
         <a
-          href="https://github.com/Sunrise-Labs-Dot-AI/engrams"
+          href="https://github.com/Sunrise-Labs-Dot-AI/lodis"
           target="_blank"
           rel="noopener noreferrer"
           className="text-text-muted hover:text-text transition-colors"
@@ -30,7 +30,7 @@ export function Footer() {
         </a>
         {" · "}
         <a
-          href="https://npmjs.com/package/engrams"
+          href="https://npmjs.com/package/lodis"
           target="_blank"
           rel="noopener noreferrer"
           className="text-text-muted hover:text-text transition-colors"

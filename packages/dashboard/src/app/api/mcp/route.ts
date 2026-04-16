@@ -1,11 +1,11 @@
 import { validateApiToken } from "@/app/settings/token-actions";
 import { validateAccessToken } from "@/lib/oauth";
-import { handleMcpRequest, unauthorizedResponse } from "engrams/serverless";
+import { handleMcpRequest, unauthorizedResponse } from "lodis/serverless";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://app.getengrams.com";
+const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://app.lodis.ai";
 
 function corsHeaders(): HeadersInit {
   return {

@@ -137,7 +137,7 @@ export async function scanCleanupAction(forceRefresh?: boolean): Promise<
 
     return scanResult;
   } catch (e) {
-    console.error("[engrams] Cleanup scan failed:", e);
+    console.error("[lodis] Cleanup scan failed:", e);
     return { error: "Cleanup scan failed" };
   }
 }
@@ -156,7 +156,7 @@ export async function dismissSuggestionAction(
     await dismissSuggestion(key, suggestionType, action, resolutionNote, userId);
     return { ok: true };
   } catch (e) {
-    console.error("[engrams] Dismiss suggestion failed:", e);
+    console.error("[lodis] Dismiss suggestion failed:", e);
     return { error: "Failed to dismiss suggestion" };
   }
 }
@@ -196,7 +196,7 @@ export async function scrubMemoryAction(
   const memory = await getMemoryById(id, userId);
   if (!memory) return { scrubbed: false, error: "Memory not found" };
 
-  const { redactSensitiveData } = await import("@engrams/core/pii");
+  const { redactSensitiveData } = await import("@lodis/core/pii");
   const { redacted: redactedContent } = redactSensitiveData(memory.content);
   const redactedDetail = memory.detail
     ? redactSensitiveData(memory.detail).redacted

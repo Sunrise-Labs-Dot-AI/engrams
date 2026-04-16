@@ -11,7 +11,7 @@ export function MemoryList({ memories, groupByDomain = true }: MemoryListProps) 
     return (
       <div className="text-center py-16">
         <p className="text-[var(--text-dim)] text-sm">
-          No memories yet. Start chatting with an AI tool that has Engrams
+          No memories yet. Start chatting with an AI tool that has Lodis
           connected.
         </p>
       </div>

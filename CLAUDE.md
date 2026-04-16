@@ -1,15 +1,15 @@
-# Engrams — Project Instructions
+# Lodis — Project Instructions
 
 ## Product Identity
 
-- **Name:** Engrams (from neuroscience: a physical trace of memory in the brain)
-- **npm:** `engrams` (unscoped, published); `@engrams/core`, `@engrams/dashboard`, `@engrams/landing` (workspace packages)
-- **Domain:** getengrams.com
-- **GitHub:** Sunrise-Labs-Dot-AI/engrams
+- **Name:** Lodis (from 'lode' — a vein of knowledge)
+- **npm:** `lodis` (unscoped, published); `@lodis/core`, `@lodis/dashboard`, `@lodis/landing` (workspace packages)
+- **Domain:** lodis.ai
+- **GitHub:** Sunrise-Labs-Dot-AI/lodis
 - **License:** MIT — Copyright (c) 2026 Sunrise Labs
 - **Tagline:** Universal, portable memory layer for AI agents with a consumer-grade control surface
 
-## What Engrams Is
+## What Lodis Is
 
 An open-source MCP server + localhost web dashboard that gives AI agents persistent, cross-tool memory with full user control. Any MCP-compatible tool (Claude Code, Cursor, Windsurf, Claude Desktop, Cline) connects to the same memory. Users browse, search, confirm, correct, and manage what their agents know through a real dashboard — not just chat commands.
 
@@ -24,7 +24,7 @@ V1–V3 feature complete. 27 MCP tools, 105 tests (92 core + 13 server), hybrid 
 - Landing page (`packages/landing`) + dashboard restyle (Pensieve design system)
 - Copyright cleanup (MIT license + metadata on all packages)
 - Pro tier: Clerk auth, BYOK config, API tokens, terms + privacy pages, API key encryption (AES-256-GCM + scrypt)
-- npm published (`engrams` on npm, v0.4.0)
+- npm published (`lodis` on npm, v0.4.0)
 - Cloud migration tool (`memory_migrate`)
 - Memory permanence tiers: canonical (pinned), active, ephemeral (TTL), archived
 - Context-packed search (`memory_context`) — token-budget-aware retrieval
@@ -47,17 +47,17 @@ V1–V3 feature complete. 27 MCP tools, 105 tests (92 core + 13 server), hybrid 
 | Landing | Next.js 15, Tailwind v4, Pensieve design system |
 | Testing | Vitest (105 tests across 10 files) |
 | Build | pnpm workspaces + Turborepo |
-| Distribution | npm (`engrams` package), npx one-liner install |
+| Distribution | npm (`lodis` package), npx one-liner install |
 
 ## Repo Structure
 
 ```
-engrams/
+lodis/
 ├── packages/
-│   ├── core/             # @engrams/core — schema, types, confidence engine, LLM abstraction, crypto, context-packing, entity profiles
-│   ├── mcp-server/       # engrams (npm) — MCP server + CLI entry point
-│   ├── dashboard/        # @engrams/dashboard — Next.js localhost app (port 3838)
-│   └── landing/          # @engrams/landing — getengrams.com landing page
+│   ├── core/             # @lodis/core — schema, types, confidence engine, LLM abstraction, crypto, context-packing, entity profiles
+│   ├── mcp-server/       # lodis (npm) — MCP server + CLI entry point
+│   ├── dashboard/        # @lodis/dashboard — Next.js localhost app (port 3838)
+│   └── landing/          # @lodis/landing — lodis.ai landing page
 ├── handoff-*.md          # Build handoff documents
 ├── LICENSE               # MIT
 ├── package.json          # pnpm workspace root
@@ -68,11 +68,11 @@ engrams/
 
 ## Data Directory
 
-All runtime data lives in `~/.engrams/`:
+All runtime data lives in `~/.lodis/`:
 
 ```
-~/.engrams/
-├── engrams.db           # SQLite database (auto-created on first run)
+~/.lodis/
+├── lodis.db           # SQLite database (auto-created on first run)
 ├── config.json          # LLM provider config, user preferences
 ├── credentials.json     # Device ID, salt (mode 0600) — Pro: + Turso creds
 └── models/              # Cached embedding model (~22MB)
@@ -81,7 +81,7 @@ All runtime data lives in `~/.engrams/`:
 
 ### Dashboard deeplinks
 
-MCP tool responses include a `url` field on every memory record so clients (Claude, Cursor, etc.) can link users directly to the dashboard detail page. The base URL is resolved in this order: `ENGRAMS_DASHBOARD_URL` → `NEXT_PUBLIC_APP_URL` → `http://localhost:3838`. Set `ENGRAMS_DASHBOARD_URL` in the MCP server's environment to point deeplinks at a non-default host (e.g. `https://app.getengrams.com` for hosted mode). Entity-shaped responses (`memory_list_entities`, `memory_briefing`) get `/entities/<name>` URLs.
+MCP tool responses include a `url` field on every memory record so clients (Claude, Cursor, etc.) can link users directly to the dashboard detail page. The base URL is resolved in this order: `LODIS_DASHBOARD_URL` → `NEXT_PUBLIC_APP_URL` → `http://localhost:3838`. Set `LODIS_DASHBOARD_URL` in the MCP server's environment to point deeplinks at a non-default host (e.g. `https://app.lodis.ai` for hosted mode). Entity-shaped responses (`memory_list_entities`, `memory_briefing`) get `/entities/<name>` URLs.
 
 ## Database Schema
 
@@ -94,7 +94,7 @@ Nine tables + two virtual tables:
 - **memory_summaries** — cached entity profiles (id, entity_name, entity_type, summary, memory_ids, token_count, generated_at, user_id)
 - **user_settings** — BYOK provider config, tier, encrypted API keys (user_id, tier, byok_provider, byok_api_key_enc, byok_base_url, byok_extraction_model, byok_analysis_model, created_at, updated_at)
 - **api_tokens** — API token management (id, user_id, name, token_hash, scopes, expires_at, revoked_at, created_at)
-- **engrams_meta** — key-value metadata (key, value) — tracks last_modified for cache invalidation
+- **lodis_meta** — key-value metadata (key, value) — tracks last_modified for cache invalidation
 - **memory_fts** — FTS5 virtual table over content, detail, entity_name, source_agent_name
 - **memory_embeddings** — sqlite-vec virtual table (float[384])
 
@@ -177,7 +177,7 @@ Hybrid search via Reciprocal Rank Fusion (k=60):
 3. Merge with RRF: `score = Σ 1/(k + rank_i)`
 4. Confidence-weighted scoring + recency boost
 5. Graph expansion (cosine threshold, max 3 hops)
-6. Embedding LRU cache (5-min TTL), result cache (invalidated on writes via engrams_meta.last_modified)
+6. Embedding LRU cache (5-min TTL), result cache (invalidated on writes via lodis_meta.last_modified)
 
 ## LLM Provider Abstraction
 
@@ -189,7 +189,7 @@ Per-task model routing (`LLMTask = "extraction" | "analysis"`):
 - **Extraction** (every write): entity classification, proactive split detection → cheap model (Haiku, GPT-4o-mini)
 - **Analysis** (user-initiated): correction, splitting, cleanup → capable model (Sonnet, GPT-4o)
 
-Config priority: `~/.engrams/config.json` → `ENGRAMS_*` env vars → `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` → null (LLM features disabled gracefully).
+Config priority: `~/.lodis/config.json` → `LODIS_*` env vars → `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` → null (LLM features disabled gracefully).
 
 Output validation: `validateExtraction()`, `validateSplit()`, `validateCorrection()` check structural validity. `checkSemanticPreservation()` uses embeddings for split quality.
 

@@ -1,10 +1,10 @@
 {
-  "name": "engrams",
+  "name": "lodis",
   "version": "0.5.1",
   "description": "Universal AI memory layer — MCP server with persistent, cross-tool memory for Claude Code, Cursor, Windsurf, and more",
   "type": "module",
   "bin": {
-    "engrams": "dist/cli.js"
+    "lodis": "dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -47,10 +47,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sunrise-Labs-Dot-AI/engrams.git",
+    "url": "git+https://github.com/Sunrise-Labs-Dot-AI/lodis.git",
     "directory": "packages/mcp-server"
   },
-  "homepage": "https://getengrams.com",
+  "homepage": "https://lodis.ai",
   "author": "Sunrise Labs <hello@sunriselabs.ai>",
   "dependencies": {
     "@huggingface/transformers": "^3.4.2",
@@ -60,7 +60,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@engrams/core": "workspace:*",
+    "@lodis/core": "workspace:*",
     "tsup": "^8.5.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.1"

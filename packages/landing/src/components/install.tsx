@@ -12,9 +12,9 @@ const clients = [
 
 const config = `{
   "mcpServers": {
-    "engrams": {
+    "lodis": {
       "command": "npx",
-      "args": ["-y", "engrams"]
+      "args": ["-y", "lodis"]
     }
   }
 }`;

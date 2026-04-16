@@ -9,7 +9,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in Engrams, please report it responsibly.
+If you discover a security vulnerability in Lodis, please report it responsibly.
 
 **Email:** [hello@sunriselabs.ai](mailto:hello@sunriselabs.ai)
 
@@ -24,20 +24,20 @@ We will acknowledge your report within 48 hours and provide a fix timeline withi
 ## Scope
 
 The following are in scope:
-- `@engrams/core` — schema, confidence engine, LLM abstraction, crypto
-- `engrams` (npm) — MCP server and CLI
-- `@engrams/dashboard` — Next.js web dashboard
-- `@engrams/landing` — getengrams.com landing page
+- `@lodis/core` — schema, confidence engine, LLM abstraction, crypto
+- `lodis` (npm) — MCP server and CLI
+- `@lodis/dashboard` — Next.js web dashboard
+- `@lodis/landing` — lodis.ai landing page
 
 The following are **out of scope**:
-- Data stored in your local `~/.engrams/` directory — this is local-only by design and under your control
-- Issues requiring physical access to the machine running Engrams
+- Data stored in your local `~/.lodis/` directory — this is local-only by design and under your control
+- Issues requiring physical access to the machine running Lodis
 - Social engineering attacks
 
 ## Security Design
 
-- All data is stored locally in SQLite (`~/.engrams/engrams.db`) by default
+- All data is stored locally in SQLite (`~/.lodis/lodis.db`) by default
 - API keys (Pro tier) are encrypted with AES-256-GCM + scrypt before storage
-- Credentials file (`~/.engrams/credentials.json`) is created with mode 0600
+- Credentials file (`~/.lodis/credentials.json`) is created with mode 0600
 - Embeddings are computed locally via Transformers.js — no data leaves your machine unless you configure an external LLM provider
 - PII detection and scrubbing available via `memory_scrub`

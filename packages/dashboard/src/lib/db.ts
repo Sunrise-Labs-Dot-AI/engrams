@@ -105,7 +105,7 @@ async function getClient(): Promise<Client> {
       });
     } else {
       _client = createClient({
-        url: "file:" + resolve(homedir(), ".engrams", "engrams.db"),
+        url: "file:" + resolve(homedir(), ".lodis", "lodis.db"),
       });
     }
   }
@@ -156,7 +156,7 @@ async function ensureSchema(client: Client): Promise<void> {
         expires_at TEXT, last_used_at TEXT, last_ip TEXT, revoked_at TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
-      CREATE TABLE IF NOT EXISTS engrams_meta (
+      CREATE TABLE IF NOT EXISTS lodis_meta (
         key TEXT PRIMARY KEY, value TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
@@ -196,13 +196,13 @@ let _decryptFn: ((text: string, key: Buffer) => string) | null = null;
 let _encryptionKey: Buffer | null = null;
 
 async function getDecrypt(): Promise<{ fn: (text: string, key: Buffer) => string; key: Buffer } | null> {
-  if (!isHosted() || !process.env.ENGRAMS_ENCRYPTION_KEY) return null;
+  if (!isHosted() || !process.env.LODIS_ENCRYPTION_KEY) return null;
   if (!_decryptFn) {
-    const { decrypt } = await import("@engrams/core/crypto");
+    const { decrypt } = await import("@lodis/core/crypto");
     _decryptFn = decrypt;
   }
   if (!_encryptionKey) {
-    _encryptionKey = Buffer.from(process.env.ENGRAMS_ENCRYPTION_KEY, "base64");
+    _encryptionKey = Buffer.from(process.env.LODIS_ENCRYPTION_KEY, "base64");
   }
   return { fn: _decryptFn, key: _encryptionKey };
 }
@@ -459,7 +459,7 @@ export async function getDbStats(userId?: string | null): Promise<{
   if (!isHosted()) {
     try {
       const { statSync } = require("fs");
-      const { size } = statSync(resolve(homedir(), ".engrams", "engrams.db"));
+      const { size } = statSync(resolve(homedir(), ".lodis", "lodis.db"));
       dbSizeBytes = size;
     } catch { /* ignore */ }
   }
@@ -1299,13 +1299,13 @@ export async function getLastModified(userId?: string | null): Promise<string | 
   const client = await getClient();
   const key = userId ? `last_modified:${userId}` : "last_modified";
   const result = await client.execute({
-    sql: `SELECT value FROM engrams_meta WHERE key = ?`,
+    sql: `SELECT value FROM lodis_meta WHERE key = ?`,
     args: [key],
   });
   if (result.rows.length > 0) return result.rows[0].value as string;
   // Fallback to global last_modified
   const fallback = await client.execute({
-    sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+    sql: `SELECT value FROM lodis_meta WHERE key = 'last_modified'`,
     args: [],
   });
   return fallback.rows.length > 0 ? (fallback.rows[0].value as string) : null;
@@ -1319,7 +1319,7 @@ export async function getCachedScanResult(userId?: string | null): Promise<{
   const client = await getClient();
   const key = userId ? `cleanup_cache:${userId}` : "cleanup_cache:_default";
   const row = await client.execute({
-    sql: `SELECT value FROM engrams_meta WHERE key = ?`,
+    sql: `SELECT value FROM lodis_meta WHERE key = ?`,
     args: [key],
   });
   if (row.rows.length === 0) return null;
@@ -1343,7 +1343,7 @@ export async function setCachedScanResult(
     result,
   });
   await client.execute({
-    sql: `INSERT OR REPLACE INTO engrams_meta (key, value) VALUES (?, ?)`,
+    sql: `INSERT OR REPLACE INTO lodis_meta (key, value) VALUES (?, ?)`,
     args: [key, value],
   });
 }

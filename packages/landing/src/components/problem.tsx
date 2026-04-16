@@ -32,7 +32,7 @@ export function Problem() {
             Today
           </p>
           <p className="text-xs font-semibold uppercase tracking-widest text-glow/70">
-            With Engrams
+            With Lodis
           </p>
         </div>
 
@@ -50,7 +50,7 @@ export function Problem() {
                 {/* After */}
                 <div className="glass border-l-2 border-glow/30 pl-5 pr-5 py-4">
                   <p className="md:hidden text-xs font-semibold uppercase tracking-widest text-glow/70 mb-2">
-                    With Engrams
+                    With Lodis
                   </p>
                   <p className="text-text leading-relaxed">{row.after}</p>
                 </div>

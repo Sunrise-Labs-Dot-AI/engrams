@@ -4,7 +4,7 @@ import { validateToken } from "./auth.js";
 import { startServer } from "./server.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
-const PORT = parseInt(process.env.ENGRAMS_PORT ?? "3939", 10);
+const PORT = parseInt(process.env.LODIS_PORT ?? "3939", 10);
 
 /**
  * Extract Bearer token from Authorization header.
@@ -133,9 +133,9 @@ export async function startServeMode() {
   });
 
   httpServer.listen(PORT, () => {
-    process.stderr.write(`[engrams] Local HTTP MCP server listening on port ${PORT}\n`);
-    process.stderr.write(`[engrams] POST/GET/DELETE /mcp — Streamable HTTP transport (Bearer auth required)\n`);
-    process.stderr.write(`[engrams] GET /health — Health check\n`);
+    process.stderr.write(`[lodis] Local HTTP MCP server listening on port ${PORT}\n`);
+    process.stderr.write(`[lodis] POST/GET/DELETE /mcp — Streamable HTTP transport (Bearer auth required)\n`);
+    process.stderr.write(`[lodis] GET /health — Health check\n`);
   });
 
   return httpServer;

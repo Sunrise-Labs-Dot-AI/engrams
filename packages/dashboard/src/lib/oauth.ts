@@ -219,8 +219,8 @@ export async function exchangeAuthCode(code: string, codeVerifier: string, clien
   const scopes = row.scopes as string;
   const expiresIn = 3600; // 1 hour
 
-  const accessToken = `engrams_at_${randomHex(32)}`;
-  const refreshToken = `engrams_rt_${randomHex(32)}`;
+  const accessToken = `lodis_at_${randomHex(32)}`;
+  const refreshToken = `lodis_rt_${randomHex(32)}`;
 
   await client.execute({
     sql: `INSERT INTO oauth_tokens (token_hash, client_id, user_id, scopes, refresh_token_hash, expires_at, created_at)
@@ -266,8 +266,8 @@ export async function refreshAccessToken(refreshToken: string, clientId: string)
 
   // Issue new tokens
   const expiresIn = 3600;
-  const newAccessToken = `engrams_at_${randomHex(32)}`;
-  const newRefreshToken = `engrams_rt_${randomHex(32)}`;
+  const newAccessToken = `lodis_at_${randomHex(32)}`;
+  const newRefreshToken = `lodis_rt_${randomHex(32)}`;
 
   await client.execute({
     sql: `INSERT INTO oauth_tokens (token_hash, client_id, user_id, scopes, refresh_token_hash, expires_at, created_at)

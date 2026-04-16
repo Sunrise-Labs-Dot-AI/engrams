@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Terms of Service | Engrams",
-  description: "Terms of Service for the Engrams AI memory platform.",
+  title: "Terms of Service | Lodis",
+  description: "Terms of Service for the Lodis AI memory platform.",
 };
 
 export default function TermsOfService() {
@@ -28,7 +28,7 @@ export default function TermsOfService() {
               1. Acceptance of Terms
             </h2>
             <p>
-              By accessing or using the Engrams platform (&quot;Service&quot;),
+              By accessing or using the Lodis platform (&quot;Service&quot;),
               operated by Sunrise Labs (&quot;we&quot;, &quot;us&quot;,
               &quot;our&quot;), you agree to be bound by these Terms of Service.
               If you do not agree, do not use the Service.
@@ -46,7 +46,7 @@ export default function TermsOfService() {
               2. Description of Service
             </h2>
             <p>
-              Engrams is a universal memory layer for AI agents. It provides
+              Lodis is a universal memory layer for AI agents. It provides
               persistent, searchable memory that works across MCP-compatible
               tools. We offer multiple tiers:
             </p>
@@ -124,10 +124,10 @@ export default function TermsOfService() {
               5. Intellectual Property
             </h2>
             <p>
-              The Engrams open-source software (MCP server, dashboard, and core
+              The Lodis open-source software (MCP server, dashboard, and core
               libraries) is licensed under the{" "}
               <a
-                href="https://github.com/Sunrise-Labs-Dot-AI/engrams/blob/main/LICENSE"
+                href="https://github.com/Sunrise-Labs-Dot-AI/lodis/blob/main/LICENSE"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-glow hover:underline"
@@ -144,7 +144,7 @@ export default function TermsOfService() {
               service availability.
             </p>
             <p className="mt-3">
-              You retain full ownership of all content you store in Engrams. We
+              You retain full ownership of all content you store in Lodis. We
               do not claim any rights over your memories, data, or intellectual
               property.
             </p>
@@ -276,10 +276,10 @@ export default function TermsOfService() {
             <p>
               If you have questions about these Terms of Service, contact us at{" "}
               <a
-                href="mailto:support@getengrams.com"
+                href="mailto:support@lodis.ai"
                 className="text-glow hover:underline"
               >
-                support@getengrams.com
+                support@lodis.ai
               </a>
               .
             </p>

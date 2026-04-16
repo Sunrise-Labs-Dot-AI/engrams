@@ -8,7 +8,7 @@ import { searchFTS } from "../fts.js";
 import type { Client } from "@libsql/client";
 
 function tempDbPath(): string {
-  return resolve(tmpdir(), `engrams-test-${randomBytes(8).toString("hex")}.db`);
+  return resolve(tmpdir(), `lodis-test-${randomBytes(8).toString("hex")}.db`);
 }
 
 async function insertMemory(
@@ -181,10 +181,10 @@ describe("search", () => {
     });
   });
 
-  describe("engrams_meta for cache invalidation", () => {
+  describe("lodis_meta for cache invalidation", () => {
     it("stores last_modified timestamp", async () => {
       const result = await client.execute({
-        sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+        sql: `SELECT value FROM lodis_meta WHERE key = 'last_modified'`,
         args: [],
       });
       expect(result.rows[0].value).toBeDefined();
@@ -192,7 +192,7 @@ describe("search", () => {
 
     it("updates last_modified on bumpLastModified", async () => {
       const beforeResult = await client.execute({
-        sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+        sql: `SELECT value FROM lodis_meta WHERE key = 'last_modified'`,
         args: [],
       });
       const before = beforeResult.rows[0].value as string;
@@ -200,7 +200,7 @@ describe("search", () => {
       await bumpLastModified(client);
 
       const afterResult = await client.execute({
-        sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+        sql: `SELECT value FROM lodis_meta WHERE key = 'last_modified'`,
         args: [],
       });
       const after = afterResult.rows[0].value as string;

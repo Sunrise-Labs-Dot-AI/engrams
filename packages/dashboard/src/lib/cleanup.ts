@@ -1,6 +1,6 @@
 import { getMemories, type MemoryRow } from "./db";
 
-// Inline PII detection patterns (avoids @engrams/core import issues in hosted environments)
+// Inline PII detection patterns (avoids @lodis/core import issues in hosted environments)
 const PII_PATTERNS: { type: string; pattern: RegExp }[] = [
   { type: "ssn", pattern: /\b\d{3}-\d{2}-\d{4}\b/g },
   { type: "credit_card", pattern: /\b(?:\d[ -]*?){13,19}\b/g },

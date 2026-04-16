@@ -1,13 +1,13 @@
 @import "tailwindcss";
-@import "@engrams/shared-ui/tokens.css";
-@import "@engrams/shared-ui/motion.css";
-@import "@engrams/shared-ui/focus.css";
+@import "@lodis/shared-ui/tokens.css";
+@import "@lodis/shared-ui/motion.css";
+@import "@lodis/shared-ui/focus.css";
 
 /*
  * Landing Tailwind utility registry.
  * Utility names (text-glow, bg-void, text-violet, etc.) are preserved as the
  * stable public API of the landing package; values resolve through the
- * canonical tokens in @engrams/shared-ui/tokens.css.
+ * canonical tokens in @lodis/shared-ui/tokens.css.
  */
 @theme {
   --color-void: var(--bg);

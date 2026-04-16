@@ -4,11 +4,11 @@ import { tmpdir, homedir } from "os";
 import { randomBytes } from "crypto";
 import { createDatabase } from "../db.js";
 import type { Client } from "@libsql/client";
-import type { EngramsDatabase } from "../db.js";
+import type { LodisDatabase } from "../db.js";
 
-const REAL_DB_PATH = resolve(homedir(), ".engrams", "engrams.db");
+const REAL_DB_PATH = resolve(homedir(), ".lodis", "lodis.db");
 
-export function tempDbPath(prefix = "engrams-eval"): string {
+export function tempDbPath(prefix = "lodis-eval"): string {
   return resolve(tmpdir(), `${prefix}-${randomBytes(8).toString("hex")}.db`);
 }
 
@@ -18,7 +18,7 @@ export function tempDbPath(prefix = "engrams-eval"): string {
  */
 export function copyRealDb(): string | null {
   if (!existsSync(REAL_DB_PATH)) return null;
-  const dest = tempDbPath("engrams-eval-real");
+  const dest = tempDbPath("lodis-eval-real");
   copyFileSync(REAL_DB_PATH, dest);
   // Copy WAL/SHM if they exist (for consistent state)
   if (existsSync(REAL_DB_PATH + "-wal")) {
@@ -48,7 +48,7 @@ export async function openRealDb() {
  * Create a fresh empty test DB with all tables/indexes set up.
  */
 export async function createTestDb() {
-  const dbPath = tempDbPath("engrams-eval-test");
+  const dbPath = tempDbPath("lodis-eval-test");
   const { db, client, vecAvailable } = await createDatabase({ url: "file:" + dbPath });
   return {
     db,

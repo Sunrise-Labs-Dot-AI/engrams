@@ -3,9 +3,9 @@ import { CodeBlock } from "./code-block";
 
 const installConfig = `{
   "mcpServers": {
-    "engrams": {
+    "lodis": {
       "command": "npx",
-      "args": ["-y", "engrams"]
+      "args": ["-y", "lodis"]
     }
   }
 }`;
@@ -39,7 +39,7 @@ export function Hero() {
             Get Started
           </a>
           <a
-            href="https://github.com/Sunrise-Labs-Dot-AI/engrams"
+            href="https://github.com/Sunrise-Labs-Dot-AI/lodis"
             target="_blank"
             rel="noopener noreferrer"
             className="btn-ghost text-base"
@@ -60,7 +60,7 @@ export function Hero() {
           <div className="screenshot-frame">
             <img
               src="/screenshots/dashboard-hero.png"
-              alt="Engrams dashboard showing memory browser with search, domain filters, and confidence scores"
+              alt="Lodis dashboard showing memory browser with search, domain filters, and confidence scores"
               width={1440}
               height={900}
               className="rounded-lg w-full h-auto"

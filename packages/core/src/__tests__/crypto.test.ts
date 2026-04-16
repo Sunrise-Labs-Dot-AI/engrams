@@ -12,7 +12,7 @@ describe("crypto", () => {
   const testKey = Buffer.alloc(32, "a");
 
   it("encrypt/decrypt roundtrip", () => {
-    const plaintext = "Hello, Engrams!";
+    const plaintext = "Hello, Lodis!";
     const encrypted = encrypt(plaintext, testKey);
     expect(encrypted).not.toBe(plaintext);
     expect(decrypt(encrypted, testKey)).toBe(plaintext);

@@ -42,7 +42,7 @@ export default async function AgentsPage() {
     return (
       <div className="text-center py-16">
         <p className="text-[var(--text-dim)] text-sm">
-          No agents have connected yet. Connect an AI tool with Engrams to see
+          No agents have connected yet. Connect an AI tool with Lodis to see
           agents here.
         </p>
       </div>

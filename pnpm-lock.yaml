@@ -49,19 +49,19 @@ importers:
       '@clerk/nextjs':
         specifier: ^7.0.12
         version: 7.0.12(next@15.5.15(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@engrams/core':
-        specifier: workspace:*
-        version: link:../core
-      '@engrams/shared-ui':
-        specifier: workspace:*
-        version: link:../shared-ui
       '@libsql/client':
         specifier: ^0.17.2
         version: 0.17.2
+      '@lodis/core':
+        specifier: workspace:*
+        version: link:../core
+      '@lodis/shared-ui':
+        specifier: workspace:*
+        version: link:../shared-ui
       clsx:
         specifier: ^2.1.0
         version: 2.1.1
-      engrams:
+      lodis:
         specifier: workspace:*
         version: link:../mcp-server
       lucide-react:
@@ -107,7 +107,7 @@ importers:
 
   packages/landing:
     dependencies:
-      '@engrams/shared-ui':
+      '@lodis/shared-ui':
         specifier: workspace:*
         version: link:../shared-ui
       clsx:
@@ -160,7 +160,7 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
     devDependencies:
-      '@engrams/core':
+      '@lodis/core':
         specifier: workspace:*
         version: link:../core
       tsup:

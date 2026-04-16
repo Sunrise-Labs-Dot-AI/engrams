@@ -6,9 +6,9 @@ import { CodeBlock } from "@/components/code-block";
 
 const stdioConfig = `{
   "mcpServers": {
-    "engrams": {
+    "lodis": {
       "command": "npx",
-      "args": ["-y", "engrams"]
+      "args": ["-y", "lodis"]
     }
   }
 }`;
@@ -90,12 +90,12 @@ export function SetupTabs() {
               <span>
                 Sign up at{" "}
                 <a
-                  href="https://app.getengrams.com/sign-up"
+                  href="https://app.lodis.ai/sign-up"
                   className="text-glow hover:underline"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  app.getengrams.com
+                  app.lodis.ai
                 </a>
               </span>
             </li>
@@ -105,7 +105,7 @@ export function SetupTabs() {
             </li>
             <li className="flex items-start gap-2">
               <span className="font-mono text-glow shrink-0">3.</span>
-              <span>Search for &ldquo;Engrams&rdquo; and authorize the connection</span>
+              <span>Search for &ldquo;Lodis&rdquo; and authorize the connection</span>
             </li>
           </ol>
           <p className="text-text-dim text-xs mt-4">

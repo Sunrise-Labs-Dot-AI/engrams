@@ -94,7 +94,7 @@ export const apiTokens = sqliteTable("api_tokens", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull(),
   tokenHash: text("token_hash").notNull().unique(),  // SHA-256(token)
-  tokenPrefix: text("token_prefix").notNull(),        // first 8 chars for display: "engrams_ab12..."
+  tokenPrefix: text("token_prefix").notNull(),        // first 8 chars for display: "lodis_ab12..."
   name: text("name").notNull(),                       // "Claude Desktop", "Cursor", etc.
   scopes: text("scopes").notNull().default("read,write"),
   expiresAt: text("expires_at"),                      // NULL = no expiration

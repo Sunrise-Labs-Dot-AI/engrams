@@ -40,7 +40,7 @@ export default async function HomePage({ searchParams }: PageProps) {
         description={
           <>
             <p className="mb-4">
-              Install the Engrams MCP server in your AI client, then ask your
+              Install the Lodis MCP server in your AI client, then ask your
               assistant to remember something. Memories will appear here as
               soon as they&rsquo;re written.
             </p>

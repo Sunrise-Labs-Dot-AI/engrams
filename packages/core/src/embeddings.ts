@@ -14,7 +14,7 @@ let embedder: Embedder | null = null;
 export async function getEmbedder(): Promise<Embedder> {
   if (!embedder) {
     const { pipeline } = await import("@huggingface/transformers");
-    const cacheDir = resolve(homedir(), ".engrams", "models");
+    const cacheDir = resolve(homedir(), ".lodis", "models");
     const model = await (pipeline as Function)("feature-extraction", MODEL_ID, {
       cache_dir: cacheDir,
       dtype: "q8",

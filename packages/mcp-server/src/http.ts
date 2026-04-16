@@ -8,8 +8,8 @@ import {
   applyConfirm,
   applyCorrect,
   applyMistake,
-} from "@engrams/core";
-import type { EngramsDatabase, Client } from "@engrams/core";
+} from "@lodis/core";
+import type { LodisDatabase, Client } from "@lodis/core";
 import { validateToken } from "./auth.js";
 
 function generateId(): string {
@@ -41,7 +41,7 @@ function parseBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 export function startHttpApi(
-  db: EngramsDatabase,
+  db: LodisDatabase,
   client: Client,
   port = 3838,
   userId?: string | null,

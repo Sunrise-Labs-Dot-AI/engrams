@@ -1,13 +1,13 @@
 import { randomBytes, createHash } from "crypto";
 
-const TOKEN_PREFIX = "engrams_";
+const TOKEN_PREFIX = "lodis_";
 
 /** Generate a new API token. Returns { token, hash, prefix }. Token is shown once, hash is stored. */
 export function generateToken(): { token: string; hash: string; prefix: string } {
   const raw = randomBytes(32).toString("hex");
   const token = TOKEN_PREFIX + raw;
   const hash = hashToken(token);
-  const prefix = token.slice(0, TOKEN_PREFIX.length + 8); // "engrams_ab12cd34"
+  const prefix = token.slice(0, TOKEN_PREFIX.length + 8); // "lodis_ab12cd34"
   return { token, hash, prefix };
 }
 

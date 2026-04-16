@@ -29,7 +29,7 @@ export function SettingsActions() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `engrams-export-${new Date().toISOString().split("T")[0]}.json`;
+    a.download = `lodis-export-${new Date().toISOString().split("T")[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -91,7 +91,7 @@ export function SettingsActions() {
       <Card className="p-4">
         <h3 className="text-sm font-semibold mb-3">Export & Import</h3>
         <p className="text-xs text-[var(--text-dim)] mb-3">
-          Export your memories as JSON, or import from another Engrams instance.
+          Export your memories as JSON, or import from another Lodis instance.
         </p>
         <div className="flex gap-2">
           <Button variant="secondary" size="sm" onClick={handleExport}>

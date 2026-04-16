@@ -1,6 +1,6 @@
 /**
  * Ground truth test cases using real memory IDs from the user's database.
- * These IDs are from the production ~/.engrams/engrams.db as of April 2026.
+ * These IDs are from the production ~/.lodis/lodis.db as of April 2026.
  *
  * If the real DB is unavailable (CI), tests that depend on these IDs are skipped.
  */
@@ -28,8 +28,8 @@ export interface SearchGroundTruth {
 
 export const MEMORY_IDS = {
   // Product & work
-  engrams_origin: "f8095ca4f3aae04bec1de7c2c726bfdc",
-  engrams_pro: "b26ddf766fb9e003443939ee534fb0fd",
+  lodis_origin: "f8095ca4f3aae04bec1de7c2c726bfdc",
+  lodis_pro: "b26ddf766fb9e003443939ee534fb0fd",
   james_pm: "4294ca9920c41365730e8296aa4683d6",
   james_technical_pm: "b5fac8491c710b09b7221e9e42b225ca",
   sunrise_labs: "abb48cda5d12fb1282eb932cf1882fcb",
@@ -77,9 +77,9 @@ export const MEMORY_IDS = {
 export const SEARCH_EXACT_CASES: SearchGroundTruth[] = [
   {
     id: "exact-1",
-    name: "Engrams product query",
-    query: "Engrams product",
-    expectedIds: [MEMORY_IDS.engrams_origin, MEMORY_IDS.engrams_pro],
+    name: "Lodis product query",
+    query: "Lodis product",
+    expectedIds: [MEMORY_IDS.lodis_origin, MEMORY_IDS.lodis_pro],
     minPrecisionAt5: 0.4,
     minMRR: 0.5,
   },
@@ -106,7 +106,7 @@ export const SEARCH_SEMANTIC_CASES: SearchGroundTruth[] = [
     id: "semantic-1",
     name: "Memory system for AI (rephrase)",
     query: "memory system for AI agents",
-    expectedIds: [MEMORY_IDS.engrams_origin],
+    expectedIds: [MEMORY_IDS.lodis_origin],
     minPrecisionAt5: 0.2,
     minMRR: 0.25,
   },
@@ -139,10 +139,10 @@ export const SEARCH_SEMANTIC_CASES: SearchGroundTruth[] = [
 export const SEARCH_DOMAIN_FILTER_CASES: SearchGroundTruth[] = [
   {
     id: "domain-1",
-    name: "Engrams domain filter",
+    name: "Lodis domain filter",
     query: "memory layer universal AI agent",
-    filters: { domain: "engrams" },
-    expectedIds: [MEMORY_IDS.engrams_origin],
+    filters: { domain: "lodis" },
+    expectedIds: [MEMORY_IDS.lodis_origin],
     minPrecisionAt5: 0.2,
     minMRR: 0.25,
   },
@@ -187,9 +187,9 @@ export const SEARCH_ENTITY_FILTER_CASES: SearchGroundTruth[] = [
   {
     id: "entity-3",
     name: "Project entity filter",
-    query: "Engrams memory AI",
+    query: "Lodis memory AI",
     filters: { entityType: "project" },
-    expectedIds: [MEMORY_IDS.engrams_origin],
+    expectedIds: [MEMORY_IDS.lodis_origin],
     minPrecisionAt5: 0.2,
     minMRR: 0.25,
   },
@@ -256,10 +256,10 @@ export const DEDUP_TRUE_POSITIVE_CASES: DedupGroundTruth[] = [
   },
   {
     id: "dedup-tp-3",
-    name: "Rephrased Engrams project description",
-    newContent: "Engrams came from the Anthropic take-home demo's universal memory concept. It fills a gap in transparent, user-controlled AI memory with a consumer UI.",
-    newDomain: "engrams",
-    existingId: MEMORY_IDS.engrams_origin,
+    name: "Rephrased Lodis project description",
+    newContent: "Lodis came from the Anthropic take-home demo's universal memory concept. It fills a gap in transparent, user-controlled AI memory with a consumer UI.",
+    newDomain: "lodis",
+    existingId: MEMORY_IDS.lodis_origin,
     shouldMatch: true,
   },
 ];
@@ -268,9 +268,9 @@ export const DEDUP_TRUE_NEGATIVE_CASES: DedupGroundTruth[] = [
   {
     id: "dedup-tn-1",
     name: "Same domain, different topic",
-    newContent: "Engrams uses a Reciprocal Rank Fusion algorithm for search",
-    newDomain: "engrams",
-    existingId: MEMORY_IDS.engrams_origin,
+    newContent: "Lodis uses a Reciprocal Rank Fusion algorithm for search",
+    newDomain: "lodis",
+    existingId: MEMORY_IDS.lodis_origin,
     shouldMatch: false,
   },
   {
@@ -344,10 +344,10 @@ export const ENTITY_EXTRACTION_CASES: EntityExtractionCase[] = [
   {
     id: "entity-extract-3",
     name: "Project with tech stack",
-    content: "The Engrams project uses SQLite for storage and TypeScript for the codebase",
+    content: "The Lodis project uses SQLite for storage and TypeScript for the codebase",
     detail: "Open-source MCP server for AI memory",
     expectedType: "project",
-    expectedName: "Engrams",
+    expectedName: "Lodis",
     expectedStructuredKeys: ["name"],
   },
   {

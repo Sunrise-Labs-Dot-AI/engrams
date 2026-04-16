@@ -3,9 +3,9 @@ import { homedir } from "os";
 import { readFileSync, writeFileSync, existsSync, chmodSync } from "fs";
 import { randomBytes, randomUUID } from "crypto";
 
-const ENGRAMS_DIR = resolve(homedir(), ".engrams");
-const CRED_PATH = resolve(ENGRAMS_DIR, "credentials.json");
-const CONFIG_PATH = resolve(ENGRAMS_DIR, "config.json");
+const LODIS_DIR = resolve(homedir(), ".lodis");
+const CRED_PATH = resolve(LODIS_DIR, "credentials.json");
+const CONFIG_PATH = resolve(LODIS_DIR, "config.json");
 
 export interface Credentials {
   deviceId: string;
@@ -30,20 +30,20 @@ export function saveCredentials(creds: Credentials): void {
   try { chmodSync(CRED_PATH, 0o600); } catch { /* non-critical */ }
 }
 
-export interface EngramsConfig {
+export interface LodisConfig {
   // LLM config removed — all semantic reasoning delegated to client LLM
 }
 
-export function loadConfig(): EngramsConfig {
+export function loadConfig(): LodisConfig {
   if (!existsSync(CONFIG_PATH)) return {};
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as EngramsConfig;
+    return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as LodisConfig;
   } catch {
     return {};
   }
 }
 
-export function saveConfig(config: EngramsConfig): void {
+export function saveConfig(config: LodisConfig): void {
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf8");
   try { chmodSync(CONFIG_PATH, 0o600); } catch { /* non-critical */ }
 }

@@ -22,7 +22,7 @@ export function ConnectClaude({ baseUrl }: { baseUrl: string }) {
         <h3 className="text-sm font-semibold">Connect to Claude</h3>
       </div>
       <p className="text-xs text-[var(--text-dim)] mb-3">
-        Add Engrams as a remote MCP server in Claude.ai, Claude Desktop, or Claude Code.
+        Add Lodis as a remote MCP server in Claude.ai, Claude Desktop, or Claude Code.
       </p>
 
       <div className="space-y-3">
@@ -50,7 +50,7 @@ export function ConnectClaude({ baseUrl }: { baseUrl: string }) {
             <li>
               In <strong>Claude Code</strong>:{" "}
               <code className="bg-[var(--bg-soft)] px-1 rounded text-[10px]">
-                claude mcp add engrams --transport http {mcpUrl}
+                claude mcp add lodis --transport http {mcpUrl}
               </code>
             </li>
           </ol>

@@ -92,7 +92,7 @@ const toolGroups: { label: string; tools: Tool[] }[] = [
       {
         name: "memory_export",
         desc: "Export memories as portable JSON",
-        example: `memory_export({ format: "json" }) → engrams-backup.json`,
+        example: `memory_export({ format: "json" }) → lodis-backup.json`,
         featured: true,
       },
       { name: "memory_index", desc: "Index external docs for unified search" },

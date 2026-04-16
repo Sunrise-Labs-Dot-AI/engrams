@@ -5,7 +5,7 @@ const BATCH_SIZE = 100;
 
 // --- Export/Import types ---
 
-export interface EngramsExportData {
+export interface LodisExportData {
   version: "1.0";
   exportedAt: string;
   memories: Record<string, unknown>[];
@@ -39,7 +39,7 @@ export async function exportMemories(
     includeEvents?: boolean;
     domain?: string;
   } = {},
-): Promise<EngramsExportData> {
+): Promise<LodisExportData> {
   const limit = Math.min(options.limit ?? 100, 500);
   const offset = options.offset ?? 0;
 
@@ -133,7 +133,7 @@ export async function exportMemories(
 }
 
 /**
- * Import memories from an Engrams export JSON.
+ * Import memories from an Lodis export JSON.
  * Preserves all original metadata faithfully — no confidence reset, no entity re-extraction.
  * Deduplicates by memory ID (INSERT OR IGNORE). Safe to re-run.
  * Remaps user_id to the provided userId.
@@ -430,14 +430,14 @@ export async function migrateToCloud(
     migrated++;
   }
 
-  // --- Engrams Meta ---
+  // --- Lodis Meta ---
   const metaResult = await localClient.execute({
-    sql: `SELECT * FROM engrams_meta`,
+    sql: `SELECT * FROM lodis_meta`,
     args: [],
   });
   for (const meta of metaResult.rows) {
     await cloudClient.execute({
-      sql: `INSERT OR REPLACE INTO engrams_meta (key, value) VALUES (?, ?)`,
+      sql: `INSERT OR REPLACE INTO lodis_meta (key, value) VALUES (?, ?)`,
       args: [meta.key as string, meta.value as string],
     });
     migrated++;
@@ -569,14 +569,14 @@ export async function migrateToLocal(
     migrated++;
   }
 
-  // --- Engrams Meta ---
+  // --- Lodis Meta ---
   const metaResult = await cloudClient.execute({
-    sql: `SELECT * FROM engrams_meta`,
+    sql: `SELECT * FROM lodis_meta`,
     args: [],
   });
   for (const meta of metaResult.rows) {
     await localClient.execute({
-      sql: `INSERT OR REPLACE INTO engrams_meta (key, value) VALUES (?, ?)`,
+      sql: `INSERT OR REPLACE INTO lodis_meta (key, value) VALUES (?, ?)`,
       args: [meta.key as string, meta.value as string],
     });
     migrated++;
@@ -587,7 +587,7 @@ export async function migrateToLocal(
 }
 
 /**
- * Initialize the full Engrams schema on a destination database.
+ * Initialize the full Lodis schema on a destination database.
  * Idempotent — safe to call multiple times.
  */
 async function initSchema(client: Client): Promise<void> {
@@ -661,11 +661,11 @@ async function initSchema(client: Client): Promise<void> {
       can_write INTEGER NOT NULL DEFAULT 1
     );
 
-    CREATE TABLE IF NOT EXISTS engrams_meta (
+    CREATE TABLE IF NOT EXISTS lodis_meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
-    INSERT OR IGNORE INTO engrams_meta (key, value) VALUES ('last_modified', datetime('now'));
+    INSERT OR IGNORE INTO lodis_meta (key, value) VALUES ('last_modified', datetime('now'));
 
     CREATE TABLE IF NOT EXISTS cleanup_dismissals (
       id TEXT PRIMARY KEY,

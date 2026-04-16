@@ -20,7 +20,7 @@ export async function GET() {
   return new NextResponse(data, {
     headers: {
       "Content-Type": "application/json",
-      "Content-Disposition": `attachment; filename="engrams-export.json"`,
+      "Content-Disposition": `attachment; filename="lodis-export.json"`,
     },
   });
 }

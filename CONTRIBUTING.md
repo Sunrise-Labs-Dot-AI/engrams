@@ -1,6 +1,6 @@
-# Contributing to Engrams
+# Contributing to Lodis
 
-Thanks for your interest in contributing to Engrams! This document covers the process for contributing to this project.
+Thanks for your interest in contributing to Lodis! This document covers the process for contributing to this project.
 
 ## Developer Certificate of Origin (DCO)
 
@@ -18,8 +18,8 @@ This adds a `Signed-off-by: Your Name <your@email.com>` line to the commit messa
 
 ```bash
 # Clone the repo
-git clone https://github.com/Sunrise-Labs-Dot-AI/engrams.git
-cd engrams
+git clone https://github.com/Sunrise-Labs-Dot-AI/lodis.git
+cd lodis
 
 # Install dependencies
 pnpm install
@@ -38,7 +38,7 @@ packages/
   core/         # Schema, types, confidence engine, LLM abstraction
   mcp-server/   # MCP server + CLI entry point (published to npm)
   dashboard/    # Next.js localhost dashboard
-  landing/      # getengrams.com landing page
+  landing/      # lodis.ai landing page
 ```
 
 ## Branch Conventions
@@ -64,4 +64,4 @@ packages/
 
 ## Reporting Issues
 
-Use [GitHub Issues](https://github.com/Sunrise-Labs-Dot-AI/engrams/issues) for bugs and feature requests. For security vulnerabilities, see [SECURITY.md](SECURITY.md).
+Use [GitHub Issues](https://github.com/Sunrise-Labs-Dot-AI/lodis/issues) for bugs and feature requests. For security vulnerabilities, see [SECURITY.md](SECURITY.md).

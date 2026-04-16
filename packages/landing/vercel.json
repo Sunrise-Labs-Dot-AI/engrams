@@ -1,5 +1,5 @@
 {
-  "buildCommand": "cd ../.. && pnpm build --filter=@engrams/landing",
+  "buildCommand": "cd ../.. && pnpm build --filter=@lodis/landing",
   "outputDirectory": ".next",
   "framework": "nextjs",
   "regions": ["sfo1"]

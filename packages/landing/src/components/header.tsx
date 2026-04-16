@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 
 const navLinks = [
-  { href: "https://github.com/Sunrise-Labs-Dot-AI/engrams", label: "GitHub", external: true },
+  { href: "https://github.com/Sunrise-Labs-Dot-AI/lodis", label: "GitHub", external: true },
   { href: "/setup", label: "Setup Guide", external: false },
-  { href: "https://app.getengrams.com/sign-in", label: "Sign In", external: false },
-  { href: "https://app.getengrams.com/sign-up", label: "Sign Up", external: false },
+  { href: "https://app.lodis.ai/sign-in", label: "Sign In", external: false },
+  { href: "https://app.lodis.ai/sign-up", label: "Sign Up", external: false },
 ];
 
 export function Header() {
@@ -29,7 +29,7 @@ export function Header() {
           href="/"
           className="font-mono text-xl font-bold text-glow tracking-tight"
         >
-          engrams
+          lodis
         </a>
 
         {/* Desktop nav */}
