@@ -1,23 +1,23 @@
 {
-  "name": "@engrams/landing",
+  "name": "@lodis/landing",
   "version": "0.1.0",
   "private": true,
-  "description": "Landing page for getengrams.com",
+  "description": "Landing page for lodis.ai",
   "license": "MIT",
   "author": "Sunrise Labs <hello@sunriselabs.ai>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Sunrise-Labs-Dot-AI/engrams.git",
+    "url": "https://github.com/Sunrise-Labs-Dot-AI/lodis.git",
     "directory": "packages/landing"
   },
-  "homepage": "https://getengrams.com",
+  "homepage": "https://lodis.ai",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
     "start": "next start"
   },
   "dependencies": {
-    "@engrams/shared-ui": "workspace:*",
+    "@lodis/shared-ui": "workspace:*",
     "next": "^15.3.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",

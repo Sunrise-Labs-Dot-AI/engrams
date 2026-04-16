@@ -83,7 +83,7 @@ export function Solution() {
       <div className="max-w-6xl mx-auto">
         <Reveal>
           <h2 className="text-3xl sm:text-4xl font-bold text-center mb-16 tracking-tight">
-            Engrams makes AI memory{" "}
+            Lodis makes AI memory{" "}
             <span className="text-glow">yours.</span>
           </h2>
         </Reveal>

@@ -1,5 +1,5 @@
 /*
- * Engrams motion preferences.
+ * Lodis motion preferences.
  * Blanket opt-out: when user prefers reduced motion, collapse every
  * animation and transition to near-instant. Simpler than per-animation
  * @media wrapping and covers all landing orb/thread/reveal/perspective

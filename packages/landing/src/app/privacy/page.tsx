@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy | Engrams",
-  description: "Privacy Policy for the Engrams AI memory platform.",
+  title: "Privacy Policy | Lodis",
+  description: "Privacy Policy for the Lodis AI memory platform.",
 };
 
 export default function PrivacyPolicy() {
@@ -25,7 +25,7 @@ export default function PrivacyPolicy() {
         <div className="space-y-10 text-text-muted leading-relaxed">
           <section>
             <p>
-              Engrams is built by Sunrise Labs (&quot;we&quot;, &quot;us&quot;,
+              Lodis is built by Sunrise Labs (&quot;we&quot;, &quot;us&quot;,
               &quot;our&quot;). We believe you should understand exactly what
               happens with your data, so this policy is written to be read, not
               just agreed to.
@@ -240,7 +240,7 @@ export default function PrivacyPolicy() {
               5. Data Retention and Deletion
             </h2>
             <p>
-              Memories are retained until you delete them. Engrams uses soft
+              Memories are retained until you delete them. Lodis uses soft
               deletes (marking memories as deleted rather than immediately
               removing them), but soft-deleted data is excluded from all search
               results and API responses. Permanently purging soft-deleted data
@@ -292,7 +292,7 @@ export default function PrivacyPolicy() {
               7. Children&apos;s Privacy
             </h2>
             <p>
-              Engrams is not intended for use by anyone under the age of 13. We
+              Lodis is not intended for use by anyone under the age of 13. We
               do not knowingly collect personal information from children under
               13. If you believe a child under 13 has provided us with personal
               information, please contact us and we will delete it.
@@ -319,10 +319,10 @@ export default function PrivacyPolicy() {
               If you have questions about this Privacy Policy or how your data is
               handled, contact us at{" "}
               <a
-                href="mailto:privacy@getengrams.com"
+                href="mailto:privacy@lodis.ai"
                 className="text-glow hover:underline"
               >
-                privacy@getengrams.com
+                privacy@lodis.ai
               </a>
               .
             </p>

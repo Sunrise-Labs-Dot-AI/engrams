@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 
 const navLinks = [
   { href: "/setup", label: "Setup Guide", external: false },
-  { href: "https://github.com/Sunrise-Labs-Dot-AI/engrams", label: "GitHub", external: true },
-  { href: "https://app.getengrams.com/sign-in", label: "Sign In", external: false },
+  { href: "https://github.com/Sunrise-Labs-Dot-AI/lodis", label: "GitHub", external: true },
+  { href: "https://app.lodis.ai/sign-in", label: "Sign In", external: false },
 ];
 
 export function Header() {
@@ -28,7 +28,7 @@ export function Header() {
           href="/"
           className="font-mono text-xl font-bold text-glow tracking-tight"
         >
-          engrams
+          lodis
         </a>
 
         {/* Desktop nav */}
@@ -46,7 +46,7 @@ export function Header() {
             </a>
           ))}
           <a
-            href="https://app.getengrams.com/sign-up"
+            href="https://app.lodis.ai/sign-up"
             className="btn-glow text-sm !py-1.5 !px-4"
           >
             Sign Up
@@ -100,7 +100,7 @@ export function Header() {
               </a>
             ))}
             <a
-              href="https://app.getengrams.com/sign-up"
+              href="https://app.lodis.ai/sign-up"
               className="btn-glow text-base text-center"
               onClick={() => setOpen(false)}
             >

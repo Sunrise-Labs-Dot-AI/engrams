@@ -1,5 +1,5 @@
 /**
- * Evaluation metrics for Engrams search and retrieval quality.
+ * Evaluation metrics for Lodis search and retrieval quality.
  */
 
 /** Precision at K: fraction of top-K retrieved that are relevant */

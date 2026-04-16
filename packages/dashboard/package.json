@@ -1,16 +1,16 @@
 {
-  "name": "@engrams/dashboard",
+  "name": "@lodis/dashboard",
   "version": "0.1.0",
   "private": true,
-  "description": "Web dashboard for browsing, searching, and managing Engrams memories",
+  "description": "Web dashboard for browsing, searching, and managing Lodis memories",
   "license": "MIT",
   "author": "Sunrise Labs <hello@sunriselabs.ai>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Sunrise-Labs-Dot-AI/engrams.git",
+    "url": "https://github.com/Sunrise-Labs-Dot-AI/lodis.git",
     "directory": "packages/dashboard"
   },
-  "homepage": "https://getengrams.com",
+  "homepage": "https://lodis.ai",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -18,9 +18,9 @@
   },
   "dependencies": {
     "@clerk/nextjs": "^7.0.12",
-    "@engrams/core": "workspace:*",
-    "@engrams/shared-ui": "workspace:*",
-    "engrams": "workspace:*",
+    "@lodis/core": "workspace:*",
+    "@lodis/shared-ui": "workspace:*",
+    "lodis": "workspace:*",
     "@libsql/client": "^0.17.2",
     "clsx": "^2.1.0",
     "lucide-react": "^0.511.0",

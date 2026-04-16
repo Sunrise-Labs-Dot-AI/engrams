@@ -7,11 +7,11 @@ import type { Server } from "http";
 import type { AddressInfo } from "net";
 import { createClient } from "@libsql/client";
 import { drizzle } from "drizzle-orm/libsql";
-import * as schema from "@engrams/core";
+import * as schema from "@lodis/core";
 import { startHttpApi } from "../http.js";
 
 function tempDbPath(): string {
-  return resolve(tmpdir(), `engrams-http-test-${randomBytes(8).toString("hex")}.db`);
+  return resolve(tmpdir(), `lodis-http-test-${randomBytes(8).toString("hex")}.db`);
 }
 
 const USER_A = "user_aaa";
@@ -93,7 +93,7 @@ const SETUP_SQL = `
     user_id TEXT
   );
 
-  CREATE TABLE IF NOT EXISTS engrams_meta (
+  CREATE TABLE IF NOT EXISTS lodis_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );

@@ -8,7 +8,7 @@ import { searchFTS } from "../fts.js";
 import type { Client } from "@libsql/client";
 
 function tempDbPath(): string {
-  return resolve(tmpdir(), `engrams-test-${randomBytes(8).toString("hex")}.db`);
+  return resolve(tmpdir(), `lodis-test-${randomBytes(8).toString("hex")}.db`);
 }
 
 describe("createDatabase", () => {

@@ -156,7 +156,7 @@ export async function hybridSearch(
   // --- Check result cache ---
   const cacheKey = JSON.stringify({ query, userId, ...options });
   const currentLastModifiedResult = await client.execute({
-    sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+    sql: `SELECT value FROM lodis_meta WHERE key = 'last_modified'`,
     args: [],
   });
   const currentLastModified = currentLastModifiedResult.rows[0] as unknown as { value: string } | undefined;

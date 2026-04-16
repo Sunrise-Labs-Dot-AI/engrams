@@ -1,7 +1,7 @@
 @import "tailwindcss";
-@import "@engrams/shared-ui/tokens.css";
-@import "@engrams/shared-ui/motion.css";
-@import "@engrams/shared-ui/focus.css";
+@import "@lodis/shared-ui/tokens.css";
+@import "@lodis/shared-ui/motion.css";
+@import "@lodis/shared-ui/focus.css";
 
 /*
  * Back-compat shim: existing Tailwind utilities (text-glow, bg-void,

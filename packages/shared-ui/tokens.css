@@ -1,5 +1,5 @@
 /*
- * Engrams canonical design tokens.
+ * Lodis canonical design tokens.
  * Imported by both packages/landing and packages/dashboard globals.css.
  * Package-local globals.css files declare back-compat aliases that resolve
  * to these canonical names — see M1 plan.

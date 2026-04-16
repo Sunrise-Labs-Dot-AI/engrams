@@ -5,7 +5,7 @@ import { createHash, randomBytes } from "crypto";
 import { resolve } from "path";
 import { homedir } from "os";
 
-const TOKEN_PREFIX = "engrams_";
+const TOKEN_PREFIX = "lodis_";
 
 function getClient() {
   if (process.env.TURSO_DATABASE_URL) {
@@ -15,7 +15,7 @@ function getClient() {
     });
   }
   return createClient({
-    url: "file:" + resolve(homedir(), ".engrams", "engrams.db"),
+    url: "file:" + resolve(homedir(), ".lodis", "lodis.db"),
   });
 }
 

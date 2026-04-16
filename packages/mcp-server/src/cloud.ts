@@ -4,7 +4,7 @@ import { validateToken } from "./auth.js";
 import { startServer } from "./server.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
-const PORT = parseInt(process.env.ENGRAMS_PORT ?? "3939", 10);
+const PORT = parseInt(process.env.LODIS_PORT ?? "3939", 10);
 
 /**
  * Extract Bearer token from Authorization header.
@@ -27,7 +27,7 @@ function getClientIp(req: IncomingMessage): string | undefined {
 export async function startCloudServer() {
   // Validate environment
   if (!process.env.TURSO_DATABASE_URL) {
-    process.stderr.write("[engrams] Error: TURSO_DATABASE_URL is required for cloud mode\n");
+    process.stderr.write("[lodis] Error: TURSO_DATABASE_URL is required for cloud mode\n");
     process.exit(1);
   }
 
@@ -140,9 +140,9 @@ export async function startCloudServer() {
   });
 
   httpServer.listen(PORT, () => {
-    process.stderr.write(`[engrams] Cloud MCP server listening on port ${PORT}\n`);
-    process.stderr.write(`[engrams] POST/GET/DELETE /mcp — Streamable HTTP transport\n`);
-    process.stderr.write(`[engrams] GET /health — Health check\n`);
+    process.stderr.write(`[lodis] Cloud MCP server listening on port ${PORT}\n`);
+    process.stderr.write(`[lodis] POST/GET/DELETE /mcp — Streamable HTTP transport\n`);
+    process.stderr.write(`[lodis] GET /health — Health check\n`);
   });
 
   return httpServer;

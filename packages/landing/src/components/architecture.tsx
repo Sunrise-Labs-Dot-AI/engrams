@@ -65,7 +65,7 @@ export function Architecture() {
         <Reveal className="flex justify-center mb-16">
           <pre className="code-block text-center">
             <code>
-              {"~/.engrams/engrams.db  "}
+              {"~/.lodis/lodis.db  "}
               <span className="text-text-dim">&larr; Your memories live here. On your machine.</span>
             </code>
           </pre>

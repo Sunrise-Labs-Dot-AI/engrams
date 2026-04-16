@@ -11,7 +11,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Engrams",
+  title: "Lodis",
   description: "AI memory dashboard",
 };
 
@@ -35,7 +35,7 @@ export default function RootLayout({
           <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <h1 className="text-lg font-bold text-[var(--color-glow)]">
-                engrams
+                lodis
               </h1>
             </div>
             <Nav />

@@ -119,7 +119,7 @@ export function EditableMemory({ id, content, detail }: EditableMemoryProps) {
           onClick={() => setEditingDetail(true)}
         >
           {detail ? (
-            <div className="prose-engrams">
+            <div className="prose-lodis">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail}</ReactMarkdown>
             </div>
           ) : (

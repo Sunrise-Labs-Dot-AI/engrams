@@ -14,7 +14,7 @@ function getClient() {
     });
   }
   return createClient({
-    url: "file:" + resolve(homedir(), ".engrams", "engrams.db"),
+    url: "file:" + resolve(homedir(), ".lodis", "lodis.db"),
   });
 }
 

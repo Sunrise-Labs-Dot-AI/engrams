@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { getRegisteredClient, createAuthCode } from "@/lib/oauth";
 
-const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://app.getengrams.com";
+const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://app.lodis.ai";
 
 /**
  * OAuth 2.1 Authorization Endpoint.
@@ -74,7 +74,7 @@ export async function GET(req: Request) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Authorize — Engrams</title>
+  <title>Authorize — Lodis</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -145,7 +145,7 @@ export async function GET(req: Request) {
 <body>
   <div class="card">
     <h1>Authorize <span class="app-name">${escapeHtml(client.clientName || "MCP Client")}</span></h1>
-    <p class="desc">This application wants to access your Engrams memories.</p>
+    <p class="desc">This application wants to access your Lodis memories.</p>
     <ul class="scopes">
       <li>Read and search your memories</li>
       <li>Create and update memories</li>
@@ -271,7 +271,7 @@ function renderMessagePage(title: string, message: string, redirectUrl?: string)
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(title)} — Engrams</title>
+  <title>${escapeHtml(title)} — Lodis</title>
   ${redirectMeta}
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }

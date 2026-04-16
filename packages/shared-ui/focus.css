@@ -1,5 +1,5 @@
 /*
- * Engrams focus-visible rule.
+ * Lodis focus-visible rule.
  * Blanket 2px accent outline on any focus-visible element. Mouse-click
  * focus (not :focus-visible) stays invisible so we don't regress the
  * normal click UX.

@@ -41,8 +41,8 @@ import {
   saveProfile,
   listProfiles,
   isProfileStale,
-} from "@engrams/core";
-import type { SourceType, Relationship, EntityType, Permanence, Client } from "@engrams/core";
+} from "@lodis/core";
+import type { SourceType, Relationship, EntityType, Permanence, Client } from "@lodis/core";
 
 function generateId(): string {
   return randomBytes(16).toString("hex");
@@ -59,7 +59,7 @@ function textResult(data: unknown) {
 }
 
 const DASHBOARD_URL =
-  process.env.ENGRAMS_DASHBOARD_URL ||
+  process.env.LODIS_DASHBOARD_URL ||
   process.env.NEXT_PUBLIC_APP_URL ||
   "http://localhost:3838";
 
@@ -89,7 +89,7 @@ function getUserId(extra: Record<string, unknown>): string | null {
 
 export async function startServer(options?: { transport?: Transport; dbUrl?: string; dbAuthToken?: string; skipEmbeddings?: boolean }) {
   const server = new McpServer({
-    name: "engrams",
+    name: "lodis",
     version: "0.1.0",
   });
 
@@ -228,7 +228,7 @@ export async function startServer(options?: { transport?: Transport; dbUrl?: str
   // Skip in serverless — backfill is a background task that makes no sense per-request
   if (vecAvailable && !options?.skipEmbeddings) {
     backfillEmbeddings(client).then((count) => {
-      if (count > 0) process.stderr.write(`[engrams] Backfilled embeddings for ${count} memories\n`);
+      if (count > 0) process.stderr.write(`[lodis] Backfilled embeddings for ${count} memories\n`);
     }).catch(() => {})
   }
 
@@ -240,9 +240,9 @@ export async function startServer(options?: { transport?: Transport; dbUrl?: str
         {
           uri: uri.href,
           mimeType: "text/plain",
-          text: `# Engrams — Memory Guidelines
+          text: `# Lodis — Memory Guidelines
 
-You have access to Engrams, a persistent memory system shared across all AI tools this user connects. Memories you save here are available in future conversations and across other tools (Claude Code, Cursor, Claude Desktop, etc.).
+You have access to Lodis, a persistent memory system shared across all AI tools this user connects. Memories you save here are available in future conversations and across other tools (Claude Code, Cursor, Claude Desktop, etc.).
 
 ## When to save a memory
 - User states a preference ("I prefer morning meetings", "I use vim keybindings")
@@ -258,7 +258,7 @@ You have access to Engrams, a persistent memory system shared across all AI tool
 - Anything the user asks you not to remember
 
 ## How to use memories
-- Search Engrams at the start of conversations when context about the user would help
+- Search Lodis at the start of conversations when context about the user would help
 - Before asking the user a question, check if the answer is already in memory
 - When a memory helps you give a better response, use it but don't narrate that you searched
 - If you act on a memory and the user confirms it was helpful, call memory_confirm
@@ -285,7 +285,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
   server.tool(
     "memory_write",
-    "Store a new memory. If a similar memory already exists, returns the existing memory and resolution options instead of writing immediately. Call again with 'resolution' and 'existing_memory_id' to resolve. Pass resolution: 'keep_both' to skip dedup check and force a new memory. IMPORTANT: Before saving factual content, check if the user has a canonical source for it (style guide, config file, documentation, spec). If so, create a reference memory (entityType: 'resource') pointing to that source instead of duplicating its content — store the location in structuredData (e.g. { path: '/path/to/file' }). Engrams should be a graph of pointers to canonical sources, not a second copy of information that lives elsewhere.",
+    "Store a new memory. If a similar memory already exists, returns the existing memory and resolution options instead of writing immediately. Call again with 'resolution' and 'existing_memory_id' to resolve. Pass resolution: 'keep_both' to skip dedup check and force a new memory. IMPORTANT: Before saving factual content, check if the user has a canonical source for it (style guide, config file, documentation, spec). If so, create a reference memory (entityType: 'resource') pointing to that source instead of duplicating its content — store the location in structuredData (e.g. { path: '/path/to/file' }). Lodis should be a graph of pointers to canonical sources, not a second copy of information that lives elsewhere.",
     {
       content: z.string().describe("The memory content"),
       domain: z.string().optional().describe("Life domain (default: general)"),
@@ -686,7 +686,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
         entityName: params.entityName ?? null,
       };
       if (totalAfterWrite <= 3) {
-        result.onboarding_hint = "Memory saved! Your database is just getting started. Call memory_onboard to run a guided setup — it will configure your agent to use Engrams by default and seed your memory with context from connected tools.";
+        result.onboarding_hint = "Memory saved! Your database is just getting started. Call memory_onboard to run a guided setup — it will configure your agent to use Lodis by default and seed your memory with context from connected tools.";
       }
       if (!params.entityType) {
         result.classify_hint = "entity_type not provided. Use memory_update to set entity_type and entity_name for better search and organization.";
@@ -700,7 +700,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
   server.tool(
     "memory_index",
-    "Index documents from external data stores (Google Drive, Notion, filesystem, GitHub, etc.) so they can be found via memory_search. You are the crawler — use your existing MCP connections (Drive, Notion, etc.) to read document metadata, then call this tool to store lightweight index entries. Engrams stores the pointer + summary, not the full content. Supports batch indexing up to 100 documents per call. Re-indexing the same location updates the existing entry.\n\nBE SELECTIVE: Do not index everything. Before crawling, ask the user which folders, sources, or topics to index. Prefer documents that relate to entities already in memory (use memory_search first to understand what's known). Skip binary files, images, auto-generated files, temp files, and anything the user wouldn't search for by topic. Quality over quantity — 50 well-summarized documents beat 5,000 junk entries. If the user says 'index my Drive', ask which folders or file types matter to them.",
+    "Index documents from external data stores (Google Drive, Notion, filesystem, GitHub, etc.) so they can be found via memory_search. You are the crawler — use your existing MCP connections (Drive, Notion, etc.) to read document metadata, then call this tool to store lightweight index entries. Lodis stores the pointer + summary, not the full content. Supports batch indexing up to 100 documents per call. Re-indexing the same location updates the existing entry.\n\nBE SELECTIVE: Do not index everything. Before crawling, ask the user which folders, sources, or topics to index. Prefer documents that relate to entities already in memory (use memory_search first to understand what's known). Skip binary files, images, auto-generated files, temp files, and anything the user wouldn't search for by topic. Quality over quantity — 50 well-summarized documents beat 5,000 junk entries. If the user says 'index my Drive', ask which folders or file types matter to them.",
     {
       documents: z.array(z.object({
         title: z.string().describe("Document title"),
@@ -1057,7 +1057,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
       // Auto-track usage for primary memories
       if (result.meta.format === "hierarchical") {
-        const hier = result as import("@engrams/core").HierarchicalResult;
+        const hier = result as import("@lodis/core").HierarchicalResult;
         const timestamp = now();
         for (const mem of hier.primary.memories) {
           await client.execute({
@@ -1099,7 +1099,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
     {
       entity_name: z.string().describe("Entity name to get a profile for (e.g., 'Sarah Chen', 'Project Alpha')"),
       entity_type: z.enum(["person", "organization", "place", "project", "preference", "event", "goal", "fact", "lesson", "routine", "skill", "resource", "decision"]).optional().describe("Entity type filter (optional — inferred from memories if omitted)"),
-      save_summary: z.string().optional().describe("If provided, saves this as the entity's profile summary (you generate the summary, Engrams stores it)"),
+      save_summary: z.string().optional().describe("If provided, saves this as the entity's profile summary (you generate the summary, Lodis stores it)"),
     },
     async (params, extra) => {
       const userId = getUserId(extra as Record<string, unknown>);
@@ -1694,7 +1694,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
             id: generateId(),
             memoryId: params.id,
             eventType: "corrected",
-            agentName: "engrams:scrub",
+            agentName: "lodis:scrub",
             oldValue: JSON.stringify({ content: "[REDACTED]" }),
             newValue: JSON.stringify({ content: redactedContent, detail: redactedDetail }),
             timestamp: now(),
@@ -1915,7 +1915,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
   server.tool(
     "memory_export",
-    "Export memories as JSON for migration to another Engrams instance. Returns paginated results — call repeatedly with increasing offset until hasMore is false. Use with memory_import (source_type: 'engrams') on the destination server to complete migration.",
+    "Export memories as JSON for migration to another Lodis instance. Returns paginated results — call repeatedly with increasing offset until hasMore is false. Use with memory_import (source_type: 'lodis') on the destination server to complete migration.",
     {
       limit: z.number().optional().describe("Memories per page (default 100, max 500)"),
       offset: z.number().optional().describe("Pagination offset (default 0)"),
@@ -2263,7 +2263,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
       plan.push("");
       plan.push("## Phase 0: Agent Configuration");
       plan.push("");
-      plan.push("Before scanning or interviewing, configure this agent to use Engrams as its default memory system. Without this step, the agent will continue using its built-in memory and Engrams will only be called when the user explicitly asks.");
+      plan.push("Before scanning or interviewing, configure this agent to use Lodis as its default memory system. Without this step, the agent will continue using its built-in memory and Lodis will only be called when the user explicitly asks.");
       plan.push("");
       plan.push("### Detect your rules file");
       plan.push("");
@@ -2276,24 +2276,24 @@ Organize memories by life domain: general, work, health, finance, relationships,
       plan.push("");
       plan.push("### Add the memory instruction");
       plan.push("");
-      plan.push("If the rules file doesn't already mention engrams, append this section:");
+      plan.push("If the rules file doesn't already mention lodis, append this section:");
       plan.push("");
       plan.push("```markdown");
       plan.push("## Memory");
       plan.push("");
-      plan.push("Use Engrams MCP tools for all persistent memory instead of the built-in auto-memory system.");
+      plan.push("Use Lodis MCP tools for all persistent memory instead of the built-in auto-memory system.");
       plan.push("At the start of conversations, call `memory_search` with relevant terms to retrieve context.");
       plan.push("When the user states a preference, corrects an assumption, shares personal context, or");
       plan.push("provides information useful across future conversations, save it with `memory_write`.");
-      plan.push("Do not duplicate memories to both Engrams and the built-in system — Engrams is the single");
+      plan.push("Do not duplicate memories to both Lodis and the built-in system — Lodis is the single");
       plan.push("source of truth.");
       plan.push("```");
       plan.push("");
       plan.push("### Tell the user what you did");
       plan.push("");
-      plan.push("Explain briefly: \"I've configured your agent to use Engrams as the default memory system. This means I'll automatically save and retrieve memories through Engrams instead of the built-in system — so everything stays portable across all your AI tools.\"");
+      plan.push("Explain briefly: \"I've configured your agent to use Lodis as the default memory system. This means I'll automatically save and retrieve memories through Lodis instead of the built-in system — so everything stays portable across all your AI tools.\"");
       plan.push("");
-      plan.push("If the user asks about the difference: Engrams memories are searchable, correctable, and shared across every MCP-connected tool. Built-in memory is tool-specific and invisible. Engrams gives you a dashboard at localhost:3838 to see and manage everything.");
+      plan.push("If the user asks about the difference: Lodis memories are searchable, correctable, and shared across every MCP-connected tool. Built-in memory is tool-specific and invisible. Lodis gives you a dashboard at localhost:3838 to see and manage everything.");
 
       // Phase 1: Tool scan
       if (!params.skip_scan) {
@@ -3326,9 +3326,9 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
   server.tool(
     "memory_import",
-    "Import memories from a known format. Parses the source, deduplicates against existing memories, and writes new ones. Supported sources: engrams (full Engrams JSON export — preserves all metadata faithfully), claude-memory (MEMORY.md files), chatgpt-export (OpenAI memory export JSON), cursorrules (.cursorrules files), gitconfig (.gitconfig), plaintext (one memory per line).",
+    "Import memories from a known format. Parses the source, deduplicates against existing memories, and writes new ones. Supported sources: lodis (full Lodis JSON export — preserves all metadata faithfully), claude-memory (MEMORY.md files), chatgpt-export (OpenAI memory export JSON), cursorrules (.cursorrules files), gitconfig (.gitconfig), plaintext (one memory per line).",
     {
-      source_type: z.enum(["engrams", "claude-memory", "chatgpt-export", "cursorrules", "gitconfig", "plaintext"]).describe("The format of the source data"),
+      source_type: z.enum(["lodis", "claude-memory", "chatgpt-export", "cursorrules", "gitconfig", "plaintext"]).describe("The format of the source data"),
       content: z.string().describe("The raw content to import. For file-based sources, pass the file contents."),
       domain: z.string().optional().describe("Domain to assign to imported memories. Default: 'general'."),
     },
@@ -3336,8 +3336,8 @@ Organize memories by life domain: general, work, health, finance, relationships,
       const userId = getUserId(extra as Record<string, unknown>);
       const domain = params.domain ?? "general";
 
-      // Engrams native format — faithful bulk import, bypasses standard pipeline
-      if (params.source_type === "engrams") {
+      // Lodis native format — faithful bulk import, bypasses standard pipeline
+      if (params.source_type === "lodis") {
         try {
           const parsed = JSON.parse(params.content);
           const exportData = {
@@ -3376,7 +3376,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
               sql: `INSERT INTO memory_events (id, memory_id, event_type, new_value, timestamp) VALUES (?, 'system', 'import', ?, ?)`,
               args: [
                 generateId(),
-                JSON.stringify({ source_type: "engrams", imported: result.imported, skipped: result.skipped, connections: result.connections }),
+                JSON.stringify({ source_type: "lodis", imported: result.imported, skipped: result.skipped, connections: result.connections }),
                 now(),
               ],
             });
@@ -3396,7 +3396,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
               : "All memories already exist in this instance (skipped).",
           });
         } catch (err) {
-          return textResult({ error: `Failed to parse Engrams export JSON: ${err instanceof Error ? err.message : String(err)}` });
+          return textResult({ error: `Failed to parse Lodis export JSON: ${err instanceof Error ? err.message : String(err)}` });
         }
       }
 
@@ -3622,11 +3622,11 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
   server.tool(
     "memory_migrate",
-    "Migrate memories between local and cloud storage. Use 'to_cloud' with cloud_api_url and cloud_api_token to upload to the hosted Engrams service, or provide cloud_url/cloud_token for direct Turso access. Use 'to_local' to download cloud memories locally.",
+    "Migrate memories between local and cloud storage. Use 'to_cloud' with cloud_api_url and cloud_api_token to upload to the hosted Lodis service, or provide cloud_url/cloud_token for direct Turso access. Use 'to_local' to download cloud memories locally.",
     {
       direction: z.enum(["to_cloud", "to_local"]).describe("Migration direction"),
-      cloud_api_url: z.string().optional().describe("Engrams cloud API URL (e.g. https://app.getengrams.com/api/migrate). Preferred for hosted service."),
-      cloud_api_token: z.string().optional().describe("OAuth access token or PAT for the hosted Engrams service"),
+      cloud_api_url: z.string().optional().describe("Lodis cloud API URL (e.g. https://app.lodis.ai/api/migrate). Preferred for hosted service."),
+      cloud_api_token: z.string().optional().describe("OAuth access token or PAT for the hosted Lodis service"),
       cloud_url: z.string().optional().describe("Turso database URL (for direct DB access — advanced)"),
       cloud_token: z.string().optional().describe("Turso auth token (for direct DB access — advanced)"),
       encryption_key: z.string().optional().describe("Base64 encryption key (only needed for direct Turso mode)"),
@@ -3636,7 +3636,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
       if (params.cloud_api_url) {
         if (!params.cloud_api_token) {
           return textResult({
-            error: "cloud_api_token is required when using cloud_api_url. Provide an OAuth access token or PAT from app.getengrams.com/settings.",
+            error: "cloud_api_token is required when using cloud_api_url. Provide an OAuth access token or PAT from app.lodis.ai/settings.",
           });
         }
 
@@ -3710,7 +3710,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
             totalEvents += result.events_migrated;
             totalPermissions += result.permissions_migrated;
 
-            process.stderr.write(`[engrams] migrate: batch ${Math.floor(i / BATCH_SIZE) + 1} — ${totalMigrated}/${memRows.length} memories\n`);
+            process.stderr.write(`[lodis] migrate: batch ${Math.floor(i / BATCH_SIZE) + 1} — ${totalMigrated}/${memRows.length} memories\n`);
           }
 
           // Handle empty memories case (still send connections/events/permissions)
@@ -3773,7 +3773,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
         encryptionKey = Buffer.from(params.encryption_key, "base64");
       } else if (creds?.salt) {
         const salt = Buffer.from(creds.salt, "base64");
-        const keys = deriveKeys("engrams-default", salt);
+        const keys = deriveKeys("lodis-default", salt);
         encryptionKey = keys.encryptionKey;
       } else {
         encryptionKey = randomBytes(32);
@@ -3792,7 +3792,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
         if (params.direction === "to_cloud") {
           const result = await migrateToCloud(client, cloudClient, encryptionKey, (msg) => {
-            process.stderr.write(`[engrams] migrate: ${msg}\n`);
+            process.stderr.write(`[lodis] migrate: ${msg}\n`);
           });
           return textResult({
             status: "migrated_to_cloud",
@@ -3802,7 +3802,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
           });
         } else {
           const result = await migrateToLocal(cloudClient, client, encryptionKey, (msg) => {
-            process.stderr.write(`[engrams] migrate: ${msg}\n`);
+            process.stderr.write(`[lodis] migrate: ${msg}\n`);
           });
           await bumpLastModified(client);
           return textResult({
@@ -3896,8 +3896,8 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
   // --- Start ---
 
-  // Start HTTP API for dashboard mutations (opt-in via --http flag or ENGRAMS_HTTP=1)
-  if (process.argv.includes("--http") || process.env.ENGRAMS_HTTP === "1") {
+  // Start HTTP API for dashboard mutations (opt-in via --http flag or LODIS_HTTP=1)
+  if (process.argv.includes("--http") || process.env.LODIS_HTTP === "1") {
     const { startHttpApi } = await import("./http.js");
     startHttpApi(db, client);
   }

@@ -13,7 +13,7 @@ const cloudFeatures = [
   "OAuth 2.1 — connect Claude.ai with one click",
   "API tokens for remote MCP clients",
   "Managed hosting — nothing to run",
-  "Dashboard at app.getengrams.com",
+  "Dashboard at app.lodis.ai",
 ];
 
 export function Deployment() {
@@ -90,7 +90,7 @@ export function Deployment() {
               </p>
 
               <a
-                href="https://app.getengrams.com/sign-up"
+                href="https://app.lodis.ai/sign-up"
                 className="btn-glow text-sm text-center w-full block"
               >
                 Sign Up

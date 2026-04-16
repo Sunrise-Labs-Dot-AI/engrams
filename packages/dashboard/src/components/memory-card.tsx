@@ -145,7 +145,7 @@ export function MemoryCard({ memory: m }: MemoryCardProps) {
             )}
           </dl>
           {m.detail && (
-            <div className="text-xs text-[var(--color-text-secondary)] mb-3 prose-engrams">
+            <div className="text-xs text-[var(--color-text-secondary)] mb-3 prose-lodis">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.detail}</ReactMarkdown>
             </div>
           )}

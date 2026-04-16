@@ -7,7 +7,7 @@ import * as schema from "./schema.js";
 import { setupFTS } from "./fts.js";
 import { setupVec } from "./vec.js";
 
-export type EngramsDatabase = LibSQLDatabase<typeof schema>;
+export type LodisDatabase = LibSQLDatabase<typeof schema>;
 
 const CREATE_TABLES_SQL = `
   CREATE TABLE IF NOT EXISTS memories (
@@ -98,11 +98,11 @@ const CREATE_TABLES_SQL = `
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  CREATE TABLE IF NOT EXISTS engrams_meta (
+  CREATE TABLE IF NOT EXISTS lodis_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
-  INSERT OR IGNORE INTO engrams_meta (key, value) VALUES ('last_modified', datetime('now'));
+  INSERT OR IGNORE INTO lodis_meta (key, value) VALUES ('last_modified', datetime('now'));
 `;
 
 async function runMigration(client: Client, name: string, fn: () => Promise<void>): Promise<void> {
@@ -276,14 +276,14 @@ async function runMigrations(client: Client): Promise<void> {
 export async function createDatabase(config?: {
   url?: string;
   authToken?: string;
-}): Promise<{ db: EngramsDatabase; client: Client; vecAvailable: boolean }> {
+}): Promise<{ db: LodisDatabase; client: Client; vecAvailable: boolean }> {
   const isLocal = !config?.url || config.url.startsWith("file:");
 
   let url: string;
   if (isLocal) {
-    const dir = resolve(homedir(), ".engrams");
+    const dir = resolve(homedir(), ".lodis");
     mkdirSync(dir, { recursive: true });
-    url = config?.url ?? "file:" + resolve(dir, "engrams.db");
+    url = config?.url ?? "file:" + resolve(dir, "lodis.db");
   } else {
     url = config.url!;
   }
@@ -333,7 +333,7 @@ export async function createDatabase(config?: {
 
 export async function bumpLastModified(client: Client): Promise<void> {
   await client.execute({
-    sql: `INSERT OR REPLACE INTO engrams_meta (key, value) VALUES ('last_modified', ?)`,
+    sql: `INSERT OR REPLACE INTO lodis_meta (key, value) VALUES ('last_modified', ?)`,
     args: [new Date().toISOString()],
   });
 }

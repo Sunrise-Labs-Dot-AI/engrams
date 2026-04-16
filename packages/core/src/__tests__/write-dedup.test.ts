@@ -8,7 +8,7 @@ import { searchFTS } from "../fts.js";
 import type { Client } from "@libsql/client";
 
 function tempDbPath(): string {
-  return resolve(tmpdir(), `engrams-dedup-${randomBytes(8).toString("hex")}.db`);
+  return resolve(tmpdir(), `lodis-dedup-${randomBytes(8).toString("hex")}.db`);
 }
 
 function generateId(): string {
@@ -225,9 +225,9 @@ describe("write dedup resolution", () => {
     expect(countResult.rows[0].c).toBe(1);
   });
 
-  it("engrams_meta table tracks last_modified", async () => {
+  it("lodis_meta table tracks last_modified", async () => {
     const beforeResult = await client.execute({
-      sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+      sql: `SELECT value FROM lodis_meta WHERE key = 'last_modified'`,
       args: [],
     });
     expect(beforeResult.rows[0]).toBeDefined();
@@ -235,7 +235,7 @@ describe("write dedup resolution", () => {
     await bumpLastModified(client);
 
     const afterResult = await client.execute({
-      sql: `SELECT value FROM engrams_meta WHERE key = 'last_modified'`,
+      sql: `SELECT value FROM lodis_meta WHERE key = 'last_modified'`,
       args: [],
     });
     expect(afterResult.rows[0].value).not.toBe(beforeResult.rows[0].value);

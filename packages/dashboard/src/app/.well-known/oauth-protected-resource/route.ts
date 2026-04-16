@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://app.getengrams.com";
+const BASE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://app.lodis.ai";
 
 export function GET() {
   return NextResponse.json({

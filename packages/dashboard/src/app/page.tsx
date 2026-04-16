@@ -45,7 +45,7 @@ export default async function HomePage({ searchParams }: PageProps) {
             </p>
             <Card className="p-4 max-w-lg w-full mb-4 mx-auto">
               <code className="text-sm text-[var(--color-accent-text)] font-mono">
-                &quot;Help me set up Engrams&quot;
+                &quot;Help me set up Lodis&quot;
               </code>
             </Card>
             <p className="text-xs text-[var(--color-text-muted)]">

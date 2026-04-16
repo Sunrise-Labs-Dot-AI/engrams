@@ -61,7 +61,7 @@ export async function setupVec(client: Client): Promise<boolean> {
     return true;
   } catch (err) {
     process.stderr.write(
-      `[engrams] libsql vector search not available — falling back to FTS5 only: ${err}\n`,
+      `[lodis] libsql vector search not available — falling back to FTS5 only: ${err}\n`,
     );
     return false;
   }
