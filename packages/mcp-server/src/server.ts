@@ -690,6 +690,51 @@ Organize memories by life domain: general, work, health, finance, relationships,
         })
         .run();
 
+      // --- Sensitive-domain default-deny for new agents ---
+      // If the user has marked this domain sensitive AND the writing agent
+      // has no existing rule for this exact domain, auto-insert a block row
+      // so the agent can't later read/write this domain without the user
+      // explicitly granting access. This is the one enforcement path the
+      // sensitive-domains feature adds (see the Agent Permissions redesign
+      // plan §Sensitive domain markers — semantics 3).
+      if (params.sourceAgentId) {
+        try {
+          const domainForWrite = params.domain ?? "general";
+          const sensitiveHit = (await client.execute({
+            sql: `SELECT 1 FROM sensitive_domains WHERE domain = ?${userId ? " AND user_id = ?" : ""} LIMIT 1`,
+            args: userId ? [domainForWrite, userId] : [domainForWrite],
+          })).rows.length > 0;
+          if (sensitiveHit) {
+            const existingRule = (await client.execute({
+              sql: `SELECT 1 FROM agent_permissions
+                      WHERE agent_id = ? AND domain = ?${userId ? " AND user_id = ?" : ""} LIMIT 1`,
+              args: userId ? [params.sourceAgentId, domainForWrite, userId] : [params.sourceAgentId, domainForWrite],
+            })).rows.length > 0;
+            if (!existingRule) {
+              await client.execute({
+                sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write, user_id)
+                      VALUES (?, ?, 0, 0, ?)`,
+                args: [params.sourceAgentId, domainForWrite, userId ?? null],
+              });
+              await db.insert(memoryEvents)
+                .values({
+                  id: generateId(),
+                  memoryId: id,
+                  eventType: "sensitive_auto_block",
+                  agentId: params.sourceAgentId,
+                  agentName: params.sourceAgentName,
+                  newValue: JSON.stringify({ domain: domainForWrite, reason: "first write to sensitive domain" }),
+                  timestamp,
+                })
+                .run();
+            }
+          }
+        } catch {
+          // Best-effort: sensitive_domains may not exist on very old DBs.
+          // Don't block the main write path on this.
+        }
+      }
+
       await bumpLastModified(client);
 
       // Check if onboarding hint should be added for near-empty databases

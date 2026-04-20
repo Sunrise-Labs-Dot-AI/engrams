@@ -1,4 +1,4 @@
-import { sqliteTable, text, real, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, real, integer, primaryKey } from "drizzle-orm/sqlite-core";
 
 export const memories = sqliteTable("memories", {
   id: text("id").primaryKey(),
@@ -108,6 +108,18 @@ export const apiTokens = sqliteTable("api_tokens", {
   revokedAt: text("revoked_at"),                      // soft revoke
   createdAt: text("created_at").notNull(),
 });
+
+export const sensitiveDomains = sqliteTable(
+  "sensitive_domains",
+  {
+    userId: text("user_id"),
+    domain: text("domain").notNull(),
+    markedAt: text("marked_at"),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.domain] }),
+  }),
+);
 
 export const cleanupDismissals = sqliteTable("cleanup_dismissals", {
   id: text("id").primaryKey(),

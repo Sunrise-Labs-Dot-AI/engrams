@@ -98,6 +98,14 @@ const CREATE_TABLES_SQL = `
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS sensitive_domains (
+    user_id TEXT,
+    domain TEXT NOT NULL,
+    marked_at TEXT
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_sensitive_domains_user_domain
+    ON sensitive_domains(IFNULL(user_id, ''), domain);
+
   CREATE TABLE IF NOT EXISTS lodis_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
