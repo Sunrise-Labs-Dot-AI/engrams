@@ -27,7 +27,14 @@ export default async function AgentAdvancedPage({ params }: PageProps) {
     getAgentPermissions(userId),
   ]);
 
-  const agent = activity.find(a => a.agentId === agentId);
+  // Same fallback as the basic detail page: surface agents that have
+  // rules but no memories yet (pre-write preset application). Without
+  // this, "Open advanced view" 404s for any rule-only agent.
+  const fromActivity = activity.find(a => a.agentId === agentId);
+  const ruleHit = permissions.find(p => p.agent_id === agentId);
+  const agent = fromActivity ?? (ruleHit
+    ? { agentId, agentName: agentId, count: 0, lastSeen: null }
+    : null);
   if (!agent) notFound();
 
   const rules = permissions.filter(p => p.agent_id === agentId);

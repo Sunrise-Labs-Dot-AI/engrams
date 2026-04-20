@@ -25,6 +25,12 @@ export function ResetRulesButton({ agentId, agentName, ruleCount }: ResetRulesBu
       try {
         await resetAgentRules(agentId);
         setOpen(false);
+        // router.refresh() before push so the destination render reads
+        // the post-delete state. Without it, on a hosted/replica
+        // deployment the user can land back on the detail page and
+        // see the old "Custom rules" listing for a beat before Next's
+        // RSC cache catches up to the revalidate.
+        router.refresh();
         router.push(`/agents/${encodeURIComponent(agentId)}`);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Could not reset rules");

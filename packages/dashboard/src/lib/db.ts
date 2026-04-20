@@ -116,7 +116,18 @@ async function getClient(): Promise<Client> {
   return _client;
 }
 
-async function ensureSchema(client: Client): Promise<void> {
+/**
+ * Idempotent — safe to await from any code path. Used by `getClient`
+ * here on every dashboard read; also exported so server actions
+ * (`@/app/agents/actions.ts`) that take a separate libsql connection
+ * can guarantee migrations have run before any ON CONFLICT statement
+ * that depends on the unique indexes created here. Without this guard,
+ * an action invoked before any dashboard page render hits a brand-new
+ * sqlite handle with no `idx_agent_permissions_unique` index, and
+ * bare `ON CONFLICT DO UPDATE` errors with "ON CONFLICT clause does
+ * not match any PRIMARY KEY or UNIQUE constraint".
+ */
+export async function ensureSchema(client: Client): Promise<void> {
   try {
     // Ensure core tables exist
     await client.executeMultiple(`
@@ -544,7 +555,7 @@ export async function getAgentActivity(
 ): Promise<{ agentId: string; agentName: string; count: number; lastSeen: string | null }[]> {
   const client = await getClient();
   const uf = userFilter(userId);
-  const result = await client.execute({
+  const fromMemories = await client.execute({
     sql: `SELECT source_agent_id as agent_id, source_agent_name as agent_name,
                  COUNT(*) as count,
                  MAX(COALESCE(last_used_at, confirmed_at, learned_at)) as last_seen
@@ -554,12 +565,30 @@ export async function getAgentActivity(
           ORDER BY count DESC`,
     args: [...uf.args],
   });
-  return result.rows.map(r => ({
-    agentId: r.agent_id as string,
-    agentName: r.agent_name as string,
-    count: r.count as number,
-    lastSeen: (r.last_seen as string | null) ?? null,
-  }));
+  const rows: { agentId: string; agentName: string; count: number; lastSeen: string | null }[] =
+    fromMemories.rows.map(r => ({
+      agentId: r.agent_id as string,
+      agentName: r.agent_name as string,
+      count: r.count as number,
+      lastSeen: (r.last_seen as string | null) ?? null,
+    }));
+
+  // Union with agents that have permission rules but no memories yet
+  // (e.g. user applied a preset before any write). Without this, the
+  // /agents grid hides rule-only agents and the only way to find them
+  // is via direct URL or the per-domain page.
+  const fromPerms = await client.execute({
+    sql: `SELECT DISTINCT agent_id FROM agent_permissions WHERE 1=1${uf.clause}`,
+    args: [...uf.args],
+  });
+  const seen = new Set(rows.map(r => r.agentId));
+  for (const r of fromPerms.rows) {
+    const aid = r.agent_id as string;
+    if (!seen.has(aid)) {
+      rows.push({ agentId: aid, agentName: aid, count: 0, lastSeen: null });
+    }
+  }
+  return rows;
 }
 
 export async function getAgentDomainDistribution(

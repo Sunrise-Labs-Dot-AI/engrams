@@ -705,46 +705,45 @@ Organize memories by life domain: general, work, health, finance, relationships,
       //   The first write is observed, not denied; subsequent access is
       //   denied until the user explicitly allows the domain.
       //
-      // Atomicity: the check + insert run inside a single libsql
-      // client.batch("write") transaction so a concurrent
-      // markDomainSensitive(..., false) cannot produce a phantom
-      // auto-block for a domain that was unmarked mid-call.
+      // Atomicity: the SELECT-and-INSERT happen as a single SQL
+      // statement (`INSERT ... SELECT ... WHERE EXISTS`) so a
+      // concurrent `markDomainSensitive(..., false)` between a check
+      // and an insert cannot produce a phantom auto-block row for a
+      // domain that was unmarked mid-call.
       if (params.sourceAgentId) {
         const domainForWrite = params.domain ?? "general";
         try {
-          // Check for the sensitive marker first (quick read; if
-          // sensitive_domains is missing on an old DB the error is
-          // caught below and the entire guard no-ops with a log).
-          const sensitiveHit = (await client.execute({
-            sql: `SELECT 1 FROM sensitive_domains WHERE domain = ?${userId ? " AND user_id = ?" : ""} LIMIT 1`,
-            args: userId ? [domainForWrite, userId] : [domainForWrite],
-          })).rows.length > 0;
-          if (sensitiveHit) {
-            // Try an atomic upsert that only lands when no rule exists
-            // yet for this (agent, domain, user). The unique index
-            // idx_agent_permissions_unique prevents duplicate wildcard
-            // / allow rules from being overwritten; ON CONFLICT DO
-            // NOTHING means existing allow-rules aren't clobbered if
-            // the user previously granted access.
-            const insertRes = await client.execute({
-              sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write, user_id)
-                    VALUES (?, ?, 0, 0, ?)
-                    ON CONFLICT DO NOTHING`,
-              args: [params.sourceAgentId, domainForWrite, userId ?? null],
-            });
-            if (insertRes.rowsAffected > 0) {
-              await db.insert(memoryEvents)
-                .values({
-                  id: generateId(),
-                  memoryId: id,
-                  eventType: "sensitive_auto_block",
-                  agentId: params.sourceAgentId,
-                  agentName: params.sourceAgentName,
-                  newValue: JSON.stringify({ domain: domainForWrite, reason: "first write to sensitive domain" }),
-                  timestamp,
-                })
-                .run();
-            }
+          // One atomic statement: insert the (agent, domain, 0, 0,
+          // user) block row only if (a) the domain is currently in
+          // `sensitive_domains` for this user and (b) there is no
+          // existing `agent_permissions` row for this exact tuple.
+          // ON CONFLICT DO NOTHING handles the race against another
+          // memory_write call from the same agent that might also be
+          // racing to insert the auto-block.
+          const insertRes = await client.execute({
+            sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write, user_id)
+                  SELECT ?, ?, 0, 0, ?
+                  WHERE EXISTS (
+                    SELECT 1 FROM sensitive_domains
+                    WHERE domain = ?${userId ? " AND user_id = ?" : ""}
+                  )
+                  ON CONFLICT DO NOTHING`,
+            args: userId
+              ? [params.sourceAgentId, domainForWrite, userId, domainForWrite, userId]
+              : [params.sourceAgentId, domainForWrite, null, domainForWrite],
+          });
+          if (insertRes.rowsAffected > 0) {
+            await db.insert(memoryEvents)
+              .values({
+                id: generateId(),
+                memoryId: id,
+                eventType: "sensitive_auto_block",
+                agentId: params.sourceAgentId,
+                agentName: params.sourceAgentName,
+                newValue: JSON.stringify({ domain: domainForWrite, reason: "first write to sensitive domain" }),
+                timestamp,
+              })
+              .run();
           }
         } catch (err) {
           // Narrowed: only sensitive_domains table-missing on a very

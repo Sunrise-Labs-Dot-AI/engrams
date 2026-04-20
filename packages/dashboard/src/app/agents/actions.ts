@@ -5,28 +5,36 @@ import { createClient, type Client } from "@libsql/client";
 import { resolve } from "path";
 import { homedir } from "os";
 import { getUserId } from "@/lib/auth";
+import { ensureSchema } from "@/lib/db";
 
 // Module-level memoization mirrors the pattern in `@/lib/db.ts`:
 // Next "use server" actions instantiate fresh per request handler, but
 // libsql's `createClient` opens a real sqlite handle (or holds a Turso
 // HTTP client). Re-creating it per action call burns file handles in
-// local mode and skips connection reuse in hosted mode. The schema
-// migrations live in `lib/db.ts:ensureSchema`; that file is already
-// awaited on every dashboard read, so by the time any action fires
-// the schema is in place.
+// local mode and skips connection reuse in hosted mode.
+//
+// We also explicitly await `ensureSchema` once per process so an action
+// fired before any dashboard page has rendered (e.g. by an MCP-driven
+// flow that triggers a server action via direct fetch) doesn't hit
+// brand-new tables missing the `idx_agent_permissions_unique` index
+// that the bare `ON CONFLICT DO UPDATE` upserts depend on.
 let _client: Client | null = null;
-function getClient(): Client {
-  if (_client) return _client;
-  if (process.env.TURSO_DATABASE_URL) {
-    _client = createClient({
-      url: process.env.TURSO_DATABASE_URL,
-      authToken: process.env.TURSO_AUTH_TOKEN,
-    });
-  } else {
-    _client = createClient({
-      url: "file:" + resolve(homedir(), ".lodis", "lodis.db"),
-    });
+let _schemaReady: Promise<void> | null = null;
+async function getClient(): Promise<Client> {
+  if (!_client) {
+    if (process.env.TURSO_DATABASE_URL) {
+      _client = createClient({
+        url: process.env.TURSO_DATABASE_URL,
+        authToken: process.env.TURSO_AUTH_TOKEN,
+      });
+    } else {
+      _client = createClient({
+        url: "file:" + resolve(homedir(), ".lodis", "lodis.db"),
+      });
+    }
   }
+  if (!_schemaReady) _schemaReady = ensureSchema(_client);
+  await _schemaReady;
   return _client;
 }
 
@@ -55,28 +63,51 @@ function validateAgentId(agentId: string): void {
   }
 }
 
-function validateDomain(domain: string): void {
+/**
+ * Validate AND normalize a domain string. Domains are stored
+ * case-folded so the sensitive-domain marker is canonical: a user who
+ * marks "Healthcare" sensitive will block agents that write to
+ * "healthcare", "HEALTHCARE", or any other casing variant. SQLite's
+ * default `IN`/`=` comparison is case-sensitive, so without this fold
+ * a casing-variant in `applyPreset`'s allowlist would silently bypass
+ * the sensitive-confirmation gate.
+ *
+ * Callers MUST use the returned value rather than the input string.
+ */
+function validateDomain(domain: string): string {
   if (!DOMAIN_RE.test(domain)) {
-    throw new Error(`Invalid domain: must be 1-128 chars, no * " ( )`);
+    throw new Error(`Invalid domain: must be 1-128 chars, alphanumeric start, [A-Za-z0-9._:-] only`);
   }
+  return domain.toLowerCase();
 }
 
-// Ownership check: an agent is "owned" by a user if that user has ever seen
-// a memory written by that agent_id. This prevents cross-tenant writes by
-// agent id guess in hosted mode.
+// Ownership check: an agent is "owned" by a user if that user has ever
+// seen a memory written by that agent_id OR has previously created an
+// agent_permissions row for it (e.g. via preset/setAgentMode before
+// the agent has written anything). This prevents cross-tenant writes
+// by agent id guess in hosted mode while still allowing agents that
+// exist only as rule-only configurations (the N1 synthetic-agent
+// case from the code review).
 async function assertAgentOwnership(
   client: Client,
   userId: string | null,
   agentId: string,
 ): Promise<void> {
   const uf = userFilter(userId);
-  const row = await client.execute({
+  const fromMemories = await client.execute({
     sql: `SELECT 1 FROM memories
             WHERE source_agent_id = ?${uf.clause}
             LIMIT 1`,
     args: [agentId, ...uf.args],
   });
-  if (row.rows.length === 0) {
+  if (fromMemories.rows.length > 0) return;
+  const fromPerms = await client.execute({
+    sql: `SELECT 1 FROM agent_permissions
+            WHERE agent_id = ?${uf.clause}
+            LIMIT 1`,
+    args: [agentId, ...uf.args],
+  });
+  if (fromPerms.rows.length === 0) {
     throw new Error(`Agent not found: ${agentId}`);
   }
 }
@@ -121,7 +152,7 @@ export async function setAgentMode(agentId: string, mode: AgentMode): Promise<vo
   if (mode !== "open" && mode !== "isolated") {
     throw new Error(`Invalid mode: ${mode}`);
   }
-  const client = getClient();
+  const client = await getClient();
   const userId = await getUserId();
   await assertAgentOwnership(client, userId, agentId);
   const uf = userFilter(userId);
@@ -153,8 +184,8 @@ export async function setAgentMode(agentId: string, mode: AgentMode): Promise<vo
  */
 export async function blockDomain(agentId: string, domain: string): Promise<void> {
   validateAgentId(agentId);
-  validateDomain(domain);
-  const client = getClient();
+  const norm = validateDomain(domain);
+  const client = await getClient();
   const userId = await getUserId();
   await assertAgentOwnership(client, userId, agentId);
 
@@ -162,7 +193,7 @@ export async function blockDomain(agentId: string, domain: string): Promise<void
     sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write, user_id)
           VALUES (?, ?, 0, 0, ?)
           ON CONFLICT DO UPDATE SET can_read = 0, can_write = 0`,
-    args: [agentId, domain, userId],
+    args: [agentId, norm, userId],
   });
 
   revalidateAgent(agentId);
@@ -179,8 +210,8 @@ export async function allowDomain(
   confirmed = false,
 ): Promise<void> {
   validateAgentId(agentId);
-  validateDomain(domain);
-  const client = getClient();
+  const norm = validateDomain(domain);
+  const client = await getClient();
   const userId = await getUserId();
   await assertAgentOwnership(client, userId, agentId);
   const uf = userFilter(userId);
@@ -188,17 +219,17 @@ export async function allowDomain(
   const sensitiveRow = await client.execute({
     sql: `SELECT 1 FROM sensitive_domains
             WHERE domain = ?${uf.clause}`,
-    args: [domain, ...uf.args],
+    args: [norm, ...uf.args],
   });
   if (sensitiveRow.rows.length > 0 && !confirmed) {
-    throw new Error(`Domain "${domain}" is marked sensitive — confirmation required`);
+    throw new Error(`Domain "${norm}" is marked sensitive — confirmation required`);
   }
 
   await client.execute({
     sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write, user_id)
           VALUES (?, ?, 1, 1, ?)
           ON CONFLICT DO UPDATE SET can_read = 1, can_write = 1`,
-    args: [agentId, domain, userId],
+    args: [agentId, norm, userId],
   });
 
   revalidateAgent(agentId);
@@ -209,8 +240,8 @@ export async function allowDomain(
  */
 export async function removeRule(agentId: string, domain: string): Promise<void> {
   validateAgentId(agentId);
-  validateDomain(domain);
-  const client = getClient();
+  const norm = validateDomain(domain);
+  const client = await getClient();
   const userId = await getUserId();
   await assertAgentOwnership(client, userId, agentId);
   const uf = userFilter(userId);
@@ -218,7 +249,7 @@ export async function removeRule(agentId: string, domain: string): Promise<void>
   await client.execute({
     sql: `DELETE FROM agent_permissions
             WHERE agent_id = ? AND domain = ?${uf.clause}`,
-    args: [agentId, domain, ...uf.args],
+    args: [agentId, norm, ...uf.args],
   });
 
   revalidateAgent(agentId);
@@ -231,7 +262,7 @@ export async function removeRule(agentId: string, domain: string): Promise<void>
  */
 export async function resetAgentRules(agentId: string): Promise<void> {
   validateAgentId(agentId);
-  const client = getClient();
+  const client = await getClient();
   const userId = await getUserId();
   await assertAgentOwnership(client, userId, agentId);
   const uf = userFilter(userId);
@@ -288,10 +319,15 @@ export async function applyPreset(
   if (preset === "lockdown" && domains.length > 0) {
     throw new Error("Lockdown preset takes no allowlist domains");
   }
-  const allowlist = preset === "lockdown" ? [] : domains;
-  for (const d of allowlist) validateDomain(d);
+  // Normalize each entry through validateDomain so a casing variant
+  // ("Healthcare" vs "healthcare") doesn't slip past the sensitive
+  // gate's case-sensitive SQL `IN` check below.
+  const allowlist = preset === "lockdown"
+    ? []
+    : domains.map(d => validateDomain(d));
+  const confirmedNorm = confirmedSensitiveDomains.map(d => validateDomain(d));
 
-  const client = getClient();
+  const client = await getClient();
   const userId = await getUserId();
   await assertAgentOwnership(client, userId, agentId);
   const uf = userFilter(userId);
@@ -307,8 +343,8 @@ export async function applyPreset(
       args: [...allowlist, ...uf.args],
     });
     const sensitiveSet = new Set(sensitiveHits.rows.map(r => r.domain as string));
-    const confirmed = new Set(confirmedSensitiveDomains);
-    const missing = [...sensitiveSet].filter(d => !confirmed.has(d));
+    const confirmedSet = new Set(confirmedNorm);
+    const missing = [...sensitiveSet].filter(d => !confirmedSet.has(d));
     if (missing.length > 0) {
       throw new Error(
         `Sensitive domain${missing.length === 1 ? "" : "s"} require confirmation: ${missing.join(", ")}`,
@@ -348,8 +384,8 @@ export async function markDomainSensitive(
   domain: string,
   sensitive: boolean,
 ): Promise<void> {
-  validateDomain(domain);
-  const client = getClient();
+  const norm = validateDomain(domain);
+  const client = await getClient();
   const userId = await getUserId();
   const uf = userFilter(userId);
 
@@ -359,13 +395,13 @@ export async function markDomainSensitive(
     await client.execute({
       sql: `INSERT INTO sensitive_domains (user_id, domain, marked_at) VALUES (?, ?, ?)
             ON CONFLICT DO NOTHING`,
-      args: [userId, domain, nowIso()],
+      args: [userId, norm, nowIso()],
     });
   } else {
     await client.execute({
       sql: `DELETE FROM sensitive_domains
               WHERE domain = ?${uf.clause}`,
-      args: [domain, ...uf.args],
+      args: [norm, ...uf.args],
     });
   }
 
@@ -374,6 +410,6 @@ export async function markDomainSensitive(
   // domain; if we revalidate the raw form, Next won't match the cache
   // key for any domain containing a space or slash and the "sensitive"
   // state will stay stale until the RSC cache ages out.
-  revalidatePath(`/agents/domains/${encodeURIComponent(domain)}`);
+  revalidatePath(`/agents/domains/${encodeURIComponent(norm)}`);
 }
 
