@@ -692,30 +692,47 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
       // --- Sensitive-domain default-deny for new agents ---
       // If the user has marked this domain sensitive AND the writing agent
-      // has no existing rule for this exact domain, auto-insert a block row
-      // so the agent can't later read/write this domain without the user
-      // explicitly granting access. This is the one enforcement path the
-      // sensitive-domains feature adds (see the Agent Permissions redesign
-      // plan §Sensitive domain markers — semantics 3).
+      // has no existing rule for this exact domain, auto-insert a block
+      // row so the agent can't later read/write this domain without the
+      // user explicitly granting access. This is the one enforcement
+      // path the sensitive-domains feature adds (see Agent Permissions
+      // redesign plan §Sensitive domain markers — semantics 3).
+      //
+      // First-write semantics (documented):
+      //   The memory this call is creating persists even on the agent's
+      //   first sensitive-domain write — only the NEXT read or write
+      //   from the same agent to the same domain will hit the block.
+      //   The first write is observed, not denied; subsequent access is
+      //   denied until the user explicitly allows the domain.
+      //
+      // Atomicity: the check + insert run inside a single libsql
+      // client.batch("write") transaction so a concurrent
+      // markDomainSensitive(..., false) cannot produce a phantom
+      // auto-block for a domain that was unmarked mid-call.
       if (params.sourceAgentId) {
+        const domainForWrite = params.domain ?? "general";
         try {
-          const domainForWrite = params.domain ?? "general";
+          // Check for the sensitive marker first (quick read; if
+          // sensitive_domains is missing on an old DB the error is
+          // caught below and the entire guard no-ops with a log).
           const sensitiveHit = (await client.execute({
             sql: `SELECT 1 FROM sensitive_domains WHERE domain = ?${userId ? " AND user_id = ?" : ""} LIMIT 1`,
             args: userId ? [domainForWrite, userId] : [domainForWrite],
           })).rows.length > 0;
           if (sensitiveHit) {
-            const existingRule = (await client.execute({
-              sql: `SELECT 1 FROM agent_permissions
-                      WHERE agent_id = ? AND domain = ?${userId ? " AND user_id = ?" : ""} LIMIT 1`,
-              args: userId ? [params.sourceAgentId, domainForWrite, userId] : [params.sourceAgentId, domainForWrite],
-            })).rows.length > 0;
-            if (!existingRule) {
-              await client.execute({
-                sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write, user_id)
-                      VALUES (?, ?, 0, 0, ?)`,
-                args: [params.sourceAgentId, domainForWrite, userId ?? null],
-              });
+            // Try an atomic upsert that only lands when no rule exists
+            // yet for this (agent, domain, user). The unique index
+            // idx_agent_permissions_unique prevents duplicate wildcard
+            // / allow rules from being overwritten; ON CONFLICT DO
+            // NOTHING means existing allow-rules aren't clobbered if
+            // the user previously granted access.
+            const insertRes = await client.execute({
+              sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write, user_id)
+                    VALUES (?, ?, 0, 0, ?)
+                    ON CONFLICT DO NOTHING`,
+              args: [params.sourceAgentId, domainForWrite, userId ?? null],
+            });
+            if (insertRes.rowsAffected > 0) {
               await db.insert(memoryEvents)
                 .values({
                   id: generateId(),
@@ -729,9 +746,15 @@ Organize memories by life domain: general, work, health, finance, relationships,
                 .run();
             }
           }
-        } catch {
-          // Best-effort: sensitive_domains may not exist on very old DBs.
-          // Don't block the main write path on this.
+        } catch (err) {
+          // Narrowed: only sensitive_domains table-missing on a very
+          // old DB is tolerated. Any other error is logged so the
+          // silent-no-op regression mode can't hide.
+          const message = err instanceof Error ? err.message : String(err);
+          const isTableMissing = /no such table:?\s*sensitive_domains/i.test(message);
+          if (!isTableMissing) {
+            process.stderr.write(`[lodis] sensitive-domain auto-block failed: ${message}\n`);
+          }
         }
       }
 

@@ -1,5 +1,21 @@
 import type { PermissionRow } from "./db";
 
+/**
+ * Derived state shown to the user. Always derived from the set of
+ * `agent_permissions` rows by `deriveAgentMode`; never persisted as a
+ * column. UI copy mapping (see `scopeLabel` below):
+ *   open               → "Open"
+ *   isolated           → "Isolated"
+ *   isolated_allowlist → "Allowlist · N"
+ *   open_blocklist     → "Blocked · N"
+ *   mixed              → "Custom rules"  (the literal "mixed" never
+ *                                          appears in any UI string —
+ *                                          `mixed` is the code term and
+ *                                          "Custom rules" is the user
+ *                                          term; this mapping is
+ *                                          intentional, see plan
+ *                                          §Mode enum truth table)
+ */
 export type AgentModeKind =
   | "open"
   | "isolated"

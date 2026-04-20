@@ -170,4 +170,43 @@ describe("applyPreset SQL pattern — atomicity", () => {
     ];
     expect(acceptable).toContainEqual(nonWildcard);
   });
+
+  it("concurrent reader observes either the old state or the new state, never the half-applied (wildcard, no allowlist) middle (W1)", async () => {
+    // Seed prior "Open + allow=[seeded]" state.
+    await db.execute({
+      sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write, user_id) VALUES (?, ?, ?, ?, ?)`,
+      args: ["agent_x", "seeded", 1, 1, null],
+    });
+
+    // Spawn many readers across the lifetime of the preset batch. Each
+    // snapshots the agent's rules; we then verify no snapshot showed the
+    // forbidden state (wildcard-deny present + allowlist absent), which
+    // would translate to "agent sees nothing" mid-flight.
+    const readerSnapshots: { domain: string; r: number; w: number }[][] = [];
+    let readersStop = false;
+    const readerLoop = (async () => {
+      while (!readersStop) {
+        readerSnapshots.push(await rules(db, "agent_x", null));
+        // Yield to the event loop without sleeping so we get many
+        // snapshots within the millisecond-scale batch window.
+        await new Promise(r => setImmediate(r));
+      }
+    })();
+
+    await db.batch(presetStmts("agent_x", null, ["a", "b", "c"]), "write");
+    readersStop = true;
+    await readerLoop;
+    // Snapshot one final time to anchor the post-state.
+    readerSnapshots.push(await rules(db, "agent_x", null));
+
+    // For each snapshot: if the wildcard-deny row is present, at least
+    // one allow row must also be present. (Empty allowlist with
+    // wildcard-deny = agent sees nothing = the forbidden state.)
+    for (const snap of readerSnapshots) {
+      const hasWildcard = snap.some(r => r.domain === "*" && r.r === 0 && r.w === 0);
+      if (!hasWildcard) continue;
+      const allows = snap.filter(r => r.domain !== "*" && r.r === 1);
+      expect(allows.length).toBeGreaterThan(0);
+    }
+  });
 });

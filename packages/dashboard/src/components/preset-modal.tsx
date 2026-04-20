@@ -74,12 +74,21 @@ export function PresetModal({
     });
   }
 
+  const sensitiveSelected = preset !== "lockdown"
+    ? Array.from(selected).filter(d => sensitiveSet.has(d))
+    : [];
+
   function submit() {
     setError(null);
     const allowlist = preset === "lockdown" ? [] : Array.from(selected);
+    // Passing `sensitiveSelected` acts as the user's confirmation for
+    // each sensitive domain — the server action requires this to match
+    // the intersection of (allowlist, sensitive_domains); see
+    // actions.ts:applyPreset. The inline warning block above the
+    // submit button is what the user is acknowledging by clicking.
     startTransition(async () => {
       try {
-        await applyPreset(agentId, preset, allowlist);
+        await applyPreset(agentId, preset, allowlist, sensitiveSelected);
         onClose();
         setSelected(new Set());
       } catch (e) {
@@ -87,10 +96,6 @@ export function PresetModal({
       }
     });
   }
-
-  const sensitiveSelected = preset !== "lockdown"
-    ? Array.from(selected).filter(d => sensitiveSet.has(d))
-    : [];
 
   return (
     <Modal open={open} onClose={onClose} title={`Apply "${copy.title}" to ${agentName}`} size="lg">

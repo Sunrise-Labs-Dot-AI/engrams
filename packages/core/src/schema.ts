@@ -109,6 +109,18 @@ export const apiTokens = sqliteTable("api_tokens", {
   createdAt: text("created_at").notNull(),
 });
 
+// Note: the operational uniqueness on (user_id, domain) is enforced
+// by a raw SQL `CREATE UNIQUE INDEX ... ON sensitive_domains(IFNULL(user_id, ''), domain)`
+// in `packages/core/src/db.ts` and `packages/dashboard/src/lib/db.ts`.
+// The Drizzle `primaryKey` declaration here is for type-introspection
+// only — SQLite's default unique semantics treat each NULL `user_id`
+// as distinct, so a plain `(user_id, domain)` PK would NOT dedupe
+// local-mode rows where `user_id IS NULL`. The IFNULL trick collapses
+// NULL tenancy into a sentinel string so upserts (`ON CONFLICT DO ...`)
+// in actions.ts:markDomainSensitive remain idempotent. If this schema
+// is ever migrated via `drizzle-kit push`, the resulting CREATE TABLE
+// will lack the IFNULL trick — re-add the raw index in a follow-up
+// migration.
 export const sensitiveDomains = sqliteTable(
   "sensitive_domains",
   {

@@ -28,6 +28,16 @@ function parse<T>(raw: unknown): T {
   return JSON.parse((raw as ToolResult).content[0].text) as T;
 }
 
+// libsql can return INTEGER columns as JS number or bigint depending on
+// the driver/platform. Normalize to number for assertions to avoid
+// platform-flakey `0` vs `0n` mismatches.
+type IntColumn = number | bigint | null;
+function num(v: IntColumn): number {
+  return typeof v === "bigint" ? Number(v) : v ?? 0;
+}
+type PermRow = { can_read: IntColumn; can_write: IntColumn };
+type CountRow = { c: IntColumn };
+
 async function withServer<T>(
   dbPath: string,
   fn: (client: McpClient, dbUrl: string) => Promise<T>,
@@ -85,10 +95,10 @@ describe("memory_write — sensitive-domain auto-block", () => {
           sql: `SELECT can_read, can_write FROM agent_permissions
                   WHERE agent_id = ? AND domain = ?`,
           args: ["new-agent", "private"],
-        })).rows[0] as unknown as { can_read: number; can_write: number } | undefined;
+        })).rows[0] as PermRow | undefined;
         expect(rule).toBeDefined();
-        expect(rule!.can_read).toBe(0);
-        expect(rule!.can_write).toBe(0);
+        expect(num(rule!.can_read)).toBe(0);
+        expect(num(rule!.can_write)).toBe(0);
 
         const audit = (await db.execute({
           sql: `SELECT event_type FROM memory_events WHERE event_type = 'sensitive_auto_block'`,
@@ -132,15 +142,58 @@ describe("memory_write — sensitive-domain auto-block", () => {
           sql: `SELECT can_read, can_write FROM agent_permissions
                   WHERE agent_id = ? AND domain = ?`,
           args: ["trusted-agent", "private"],
-        })).rows[0] as unknown as { can_read: number; can_write: number };
-        expect(rule.can_read).toBe(1);
-        expect(rule.can_write).toBe(1);
+        })).rows[0] as PermRow;
+        expect(num(rule.can_read)).toBe(1);
+        expect(num(rule.can_write)).toBe(1);
 
         const audit = (await db.execute({
           sql: `SELECT event_type FROM memory_events WHERE event_type = 'sensitive_auto_block'`,
           args: [],
         })).rows;
         expect(audit.length).toBe(0);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  it("logs but does not crash if sensitive_domains table is missing (W5)", async () => {
+    await withServer(dbPath, async (mcp, dbUrl) => {
+      const db = createClient({ url: dbUrl });
+      try {
+        // Simulate a very old DB by dropping the table after server init.
+        await db.execute({ sql: `DROP TABLE IF EXISTS sensitive_domains`, args: [] });
+
+        const errs: string[] = [];
+        const origWrite = process.stderr.write.bind(process.stderr);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (process.stderr as unknown as { write: (s: string) => boolean }).write = (s: string) => {
+          errs.push(String(s));
+          return true;
+        };
+
+        try {
+          const raw = await mcp.callTool({
+            name: "memory_write",
+            arguments: {
+              content: "A fact",
+              domain: "any",
+              sourceAgentId: "agent-x",
+              sourceAgentName: "Agent X",
+              sourceType: "stated",
+            },
+          });
+          const res = parse<{ id?: string; error?: string }>(raw);
+          // Memory still lands; sensitive guard no-ops on table-missing.
+          expect(res.error).toBeUndefined();
+          expect(res.id).toBeTruthy();
+          // No "sensitive-domain auto-block failed" log because the
+          // table-missing case is the explicit narrow-catch path.
+          const noisy = errs.join("").includes("sensitive-domain auto-block failed");
+          expect(noisy).toBe(false);
+        } finally {
+          (process.stderr as unknown as { write: typeof origWrite }).write = origWrite;
+        }
       } finally {
         db.close();
       }
@@ -167,8 +220,8 @@ describe("memory_write — sensitive-domain auto-block", () => {
         const rules = (await db.execute({
           sql: `SELECT COUNT(*) as c FROM agent_permissions WHERE agent_id = ?`,
           args: ["any-agent"],
-        })).rows[0] as unknown as { c: number };
-        expect(rules.c).toBe(0);
+        })).rows[0] as CountRow;
+        expect(num(rules.c)).toBe(0);
       } finally {
         db.close();
       }

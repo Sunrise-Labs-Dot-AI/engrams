@@ -173,6 +173,13 @@ async function ensureSchema(client: Client): Promise<void> {
       ["add_entity_columns", "ALTER TABLE memories ADD COLUMN entity_type TEXT; ALTER TABLE memories ADD COLUMN entity_name TEXT; ALTER TABLE memories ADD COLUMN structured_data TEXT"],
       ["add_updated_at", "ALTER TABLE memories ADD COLUMN updated_at TEXT; ALTER TABLE memory_connections ADD COLUMN updated_at TEXT"],
       ["add_user_id_columns", "ALTER TABLE memories ADD COLUMN user_id TEXT; ALTER TABLE memory_connections ADD COLUMN user_id TEXT; ALTER TABLE memory_events ADD COLUMN user_id TEXT; ALTER TABLE agent_permissions ADD COLUMN user_id TEXT"],
+      // Deduplicate before adding unique index, then add it. IFNULL(user_id, '')
+      // collapses NULL tenancy so the unique key works in local mode too.
+      // The MIN(rowid) keeps one row per group arbitrarily — acceptable
+      // because prior races only produced exact duplicates.
+      ["agent_permissions_unique_index",
+        "DELETE FROM agent_permissions WHERE rowid NOT IN (SELECT MIN(rowid) FROM agent_permissions GROUP BY agent_id, domain, IFNULL(user_id, ''));"
+        + " CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_permissions_unique ON agent_permissions(agent_id, domain, IFNULL(user_id, ''))"],
     ];
 
     for (const [name, sql] of migrations) {

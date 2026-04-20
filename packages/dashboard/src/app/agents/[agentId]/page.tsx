@@ -51,7 +51,19 @@ export default async function AgentDetailPage({ params }: PageProps) {
       getSensitiveDomains(userId),
     ]);
 
-  const agent = activity.find(a => a.agentId === agentId);
+  // Resolve the agent from two sources: (1) activity (memories the
+  // agent has authored for this user) and (2) permissions (rules the
+  // user has defined for this agent_id, even if the agent has not yet
+  // written any memories under this user account). Falling back to
+  // permissions handles the legitimate "I applied a preset before any
+  // writes happened" case so the page never 404s after a user creates
+  // a rule. Name resolution: prefer the activity row's name, otherwise
+  // fall back to the agent_id (which is always present and stable).
+  const fromActivity = activity.find(a => a.agentId === agentId);
+  const ruleHit = permissions.find(p => p.agent_id === agentId);
+  const agent = fromActivity ?? (ruleHit
+    ? { agentId, agentName: agentId, count: 0, lastSeen: null }
+    : null);
   if (!agent) notFound();
 
   const rules = permissions.filter(p => p.agent_id === agentId);
