@@ -711,15 +711,23 @@ Organize memories by life domain: general, work, health, finance, relationships,
       // and an insert cannot produce a phantom auto-block row for a
       // domain that was unmarked mid-call.
       if (params.sourceAgentId) {
-        const domainForWrite = params.domain ?? "general";
+        // Lowercase to match the dashboard's `validateDomain`
+        // normalization (actions.ts). Without this, an agent writing
+        // to `"Healthcare"` would not match a `sensitive_domains` row
+        // that the dashboard stored as `"healthcare"`, so the
+        // auto-block would silently fail to fire for any domain the
+        // user marked sensitive via the UI using a casing variant.
+        const domainForWrite = (params.domain ?? "general").toLowerCase();
         try {
-          // One atomic statement: insert the (agent, domain, 0, 0,
-          // user) block row only if (a) the domain is currently in
-          // `sensitive_domains` for this user and (b) there is no
-          // existing `agent_permissions` row for this exact tuple.
-          // ON CONFLICT DO NOTHING handles the race against another
-          // memory_write call from the same agent that might also be
-          // racing to insert the auto-block.
+          // One atomic statement. (a) `WHERE EXISTS (...)` enforces
+          // the "domain is currently sensitive for this user" check
+          // in the same statement as the insert, so a concurrent
+          // `markDomainSensitive(..., false)` cannot produce a
+          // phantom auto-block. (b) `ON CONFLICT DO NOTHING` against
+          // `idx_agent_permissions_unique` preserves any pre-existing
+          // allow rule for this agent+domain — the audit event below
+          // only fires when a new row actually lands (see
+          // `insertRes.rowsAffected > 0`).
           const insertRes = await client.execute({
             sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write, user_id)
                   SELECT ?, ?, 0, 0, ?

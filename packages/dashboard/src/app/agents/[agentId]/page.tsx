@@ -52,13 +52,23 @@ export default async function AgentDetailPage({ params }: PageProps) {
     ]);
 
   // Resolve the agent from two sources: (1) activity (memories the
-  // agent has authored for this user) and (2) permissions (rules the
-  // user has defined for this agent_id, even if the agent has not yet
-  // written any memories under this user account). Falling back to
-  // permissions handles the legitimate "I applied a preset before any
-  // writes happened" case so the page never 404s after a user creates
-  // a rule. Name resolution: prefer the activity row's name, otherwise
-  // fall back to the agent_id (which is always present and stable).
+  // agent has authored for this user) and (2) permissions (rules this
+  // user has defined for this agent_id).
+  //
+  // The fallback covers three legitimate paths:
+  //   a. The MCP sensitive-domain auto-block wrote a (0, 0) rule for
+  //      an agent whose only memory was later deleted — ownership
+  //      still passes via the rule row.
+  //   b. A hosted-mode admin tool / migration seeded rules before any
+  //      memory existed (rare, but possible).
+  //   c. A rule was created via an MCP tool call (e.g. a Lodis
+  //      internal helper) before the user browsed the dashboard.
+  //
+  // Pre-write UI configuration is NOT a supported path from this page
+  // — `assertAgentOwnership` rejects mutating actions on an unknown
+  // agent_id. The fallback is strictly a render-time recovery so a
+  // user whose memory history was pruned can still see and reset
+  // their rules.
   const fromActivity = activity.find(a => a.agentId === agentId);
   const ruleHit = permissions.find(p => p.agent_id === agentId);
   const agent = fromActivity ?? (ruleHit

@@ -28,8 +28,10 @@ export default async function AgentAdvancedPage({ params }: PageProps) {
   ]);
 
   // Same fallback as the basic detail page: surface agents that have
-  // rules but no memories yet (pre-write preset application). Without
-  // this, "Open advanced view" 404s for any rule-only agent.
+  // rules but no surviving memories (e.g. auto-block wrote a rule
+  // then the only memory was deleted, or an admin migration seeded
+  // rules). Without this, "Open advanced view" 404s for any
+  // rule-only agent.
   const fromActivity = activity.find(a => a.agentId === agentId);
   const ruleHit = permissions.find(p => p.agent_id === agentId);
   const agent = fromActivity ?? (ruleHit

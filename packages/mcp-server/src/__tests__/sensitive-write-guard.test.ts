@@ -200,6 +200,50 @@ describe("memory_write — sensitive-domain auto-block", () => {
     });
   });
 
+  it("matches sensitive domain case-insensitively (dashboard stores lowercase)", async () => {
+    // Dashboard's actions.ts `validateDomain` lowercases before INSERT,
+    // so a user who marks "Finance" via the UI ends up with
+    // `sensitive_domains.domain = "finance"`. An agent writing with
+    // `domain: "Finance"` (mixed case) must still trigger the auto-
+    // block — otherwise the sensitive marker is trivially bypassable
+    // by casing variants.
+    await withServer(dbPath, async (mcp, dbUrl) => {
+      const db = createClient({ url: dbUrl });
+      try {
+        await db.execute({
+          sql: `INSERT INTO sensitive_domains (user_id, domain, marked_at) VALUES (?, ?, ?)`,
+          args: [null, "finance", new Date().toISOString()],
+        });
+
+        const raw = await mcp.callTool({
+          name: "memory_write",
+          arguments: {
+            content: "A number",
+            domain: "Finance", // mixed case
+            sourceAgentId: "new-agent-mc",
+            sourceAgentName: "New Agent MC",
+            sourceType: "stated",
+          },
+        });
+        const res = parse<{ error?: string }>(raw);
+        expect(res.error).toBeUndefined();
+
+        // Auto-block is written with the lowercased domain to match
+        // the dashboard's storage key.
+        const rule = (await db.execute({
+          sql: `SELECT can_read, can_write FROM agent_permissions
+                  WHERE agent_id = ? AND domain = ?`,
+          args: ["new-agent-mc", "finance"],
+        })).rows[0] as PermRow | undefined;
+        expect(rule).toBeDefined();
+        expect(num(rule!.can_read)).toBe(0);
+        expect(num(rule!.can_write)).toBe(0);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
   it("does nothing for non-sensitive domains", async () => {
     await withServer(dbPath, async (mcp, dbUrl) => {
       const db = createClient({ url: dbUrl });
