@@ -44,7 +44,7 @@ export function DashboardChapterNav({ chapters }: { chapters: NavEntry[] }) {
                 className={clsx(
                   "block text-sm py-1.5 pl-3 -ml-[2px] border-l-2 transition-colors whitespace-nowrap",
                   isActive
-                    ? "text-[var(--text)] border-[#a78bfa]"
+                    ? "text-[var(--text)] border-[var(--accent)]"
                     : "text-[var(--text-muted)] border-transparent hover:text-[var(--text)]",
                 )}
               >

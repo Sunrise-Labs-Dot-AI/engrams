@@ -8,7 +8,7 @@ import { TryItNextPanel } from "@/components/try-it-next";
 export const metadata: Metadata = {
   title: "How Lodis works",
   description:
-    "Lodis gives your AI agents a memory that's yours, not the tool's. 27 MCP tools, 105 tests, MIT open source.",
+    "Lodis gives your AI agents a memory that's yours, not the tool's. 30 MCP tools, 128 tests, MIT open source.",
 };
 
 export default function HowItWorksPage() {
@@ -27,9 +27,9 @@ export default function HowItWorksPage() {
                 Lodis gives your AI agents a memory that&apos;s yours, not the tool&apos;s.
               </h1>
               <p className="how-hero-proof">
-                <span>27 MCP tools</span>
+                <span>30 MCP tools</span>
                 <span aria-hidden="true" className="how-hero-dot">·</span>
-                <span>105 tests passing</span>
+                <span>128 tests passing</span>
                 <span aria-hidden="true" className="how-hero-dot">·</span>
                 <span>MIT open source</span>
               </p>
