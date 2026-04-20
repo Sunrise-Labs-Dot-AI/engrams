@@ -46,6 +46,41 @@ export interface EntityProfileSummary {
   summary: string;
 }
 
+export interface Saturation {
+  budgetBound: boolean;
+  budgetUsedPct: number;
+}
+
+export interface ScoreDistribution {
+  hasCliff: boolean;
+  cliffAt: number | null;
+  shape: "flat" | "cliff" | "decaying";
+  normalizedCurve: number[];
+}
+
+export interface Coverage {
+  domains: string[];
+  entityTypes: string[];
+  entityNames: string[];
+}
+
+export interface SuggestedFollowUp {
+  kind: "drill" | "broaden" | "briefing";
+  target: string;
+  reason: string;
+}
+
+export interface ContextMeta {
+  totalMatches: number;
+  tokenBudget: number;
+  tokensUsed: number;
+  retrievalId?: string;
+  saturation: Saturation;
+  scoreDistribution: ScoreDistribution;
+  coverage: Coverage;
+  suggestedFollowUps: SuggestedFollowUp[];
+}
+
 export interface HierarchicalResult {
   primary: {
     memories: ContextMemory[];
@@ -63,25 +98,160 @@ export interface HierarchicalResult {
     profiles: EntityProfileSummary[];
     tokenCount: number;
   };
-  meta: {
-    totalMatches: number;
-    tokenBudget: number;
-    tokensUsed: number;
-    format: "hierarchical";
-  };
+  returnedMemoryIds: string[];
+  meta: ContextMeta & { format: "hierarchical" };
 }
 
 export interface NarrativeResult {
   text: string;
-  meta: {
-    totalMatches: number;
-    tokenBudget: number;
-    tokensUsed: number;
-    format: "narrative";
-  };
+  returnedMemoryIds: string[];
+  meta: ContextMeta & { format: "narrative" };
 }
 
 export type ContextPackedResult = HierarchicalResult | NarrativeResult;
+
+// --- Sanitization (prompt-injection defense for suggestedFollowUps.target) ---
+
+const FOLLOW_UP_TARGET_MAX_LEN = 80;
+const FOLLOW_UP_TARGET_ALLOWED = /[^A-Za-z0-9 .,&'\-]/g;
+
+export function sanitizeFollowUpTarget(raw: string): string {
+  const stripped = raw.replace(FOLLOW_UP_TARGET_ALLOWED, " ").replace(/\s+/g, " ").trim();
+  return stripped.length > FOLLOW_UP_TARGET_MAX_LEN
+    ? stripped.slice(0, FOLLOW_UP_TARGET_MAX_LEN)
+    : stripped;
+}
+
+// --- Score distribution (pinned cliff detection) ---
+
+function mean(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  let sum = 0;
+  for (const x of xs) sum += x;
+  return sum / xs.length;
+}
+
+export function computeScoreDistribution(rawScores: number[]): ScoreDistribution {
+  if (rawScores.length === 0) {
+    return { hasCliff: false, cliffAt: null, shape: "flat", normalizedCurve: [] };
+  }
+  const top = rawScores.slice(0, Math.min(20, rawScores.length));
+  const maxScore = Math.max(...top);
+  const normalizedCurve = maxScore > 0 ? top.map((s) => s / maxScore) : top.map(() => 0);
+
+  if (normalizedCurve.length < 2) {
+    return { hasCliff: false, cliffAt: null, shape: "flat", normalizedCurve };
+  }
+
+  const headSize = Math.min(3, normalizedCurve.length);
+  const tailSize = Math.min(3, normalizedCurve.length);
+  const head = mean(normalizedCurve.slice(0, headSize));
+  const tail = mean(normalizedCurve.slice(-tailSize));
+  const hasCliff = head > 0 && tail / head < 0.4;
+
+  let cliffAt: number | null = null;
+  if (hasCliff) {
+    const firstScore = normalizedCurve[0];
+    for (let i = 0; i < normalizedCurve.length; i++) {
+      if (firstScore > 0 && normalizedCurve[i] / firstScore < 0.4) {
+        cliffAt = i;
+        break;
+      }
+    }
+  }
+
+  const shape: "flat" | "cliff" | "decaying" = hasCliff
+    ? "cliff"
+    : head > 0 && tail / head > 0.8
+      ? "flat"
+      : "decaying";
+
+  return { hasCliff, cliffAt, shape, normalizedCurve };
+}
+
+// --- Coverage + follow-ups ---
+
+function computeCoverage(results: ExpandedResult[]): Coverage {
+  const domains = new Set<string>();
+  const entityTypes = new Set<string>();
+  const entityNames = new Set<string>();
+  for (const r of results) {
+    const d = r.memory.domain as string | null;
+    if (d) domains.add(d);
+    const et = r.memory.entity_type as string | null;
+    if (et) entityTypes.add(et);
+    const en = r.memory.entity_name as string | null;
+    if (en) entityNames.add(en);
+  }
+  return {
+    domains: Array.from(domains),
+    entityTypes: Array.from(entityTypes),
+    entityNames: Array.from(entityNames),
+  };
+}
+
+function computeSuggestedFollowUps(
+  primaryResults: ExpandedResult[],
+  saturation: Saturation,
+  scoreDistribution: ScoreDistribution,
+  tokenBudget: number,
+  hadDomainFilter: boolean,
+): SuggestedFollowUp[] {
+  const followUps: SuggestedFollowUp[] = [];
+
+  // Count entity name occurrences in primary
+  const entityCounts = new Map<string, number>();
+  for (const r of primaryResults) {
+    const name = r.memory.entity_name as string | null;
+    if (name) entityCounts.set(name, (entityCounts.get(name) ?? 0) + 1);
+  }
+  for (const [name, count] of entityCounts.entries()) {
+    if (count >= 2) {
+      followUps.push({
+        kind: "briefing",
+        target: sanitizeFollowUpTarget(name),
+        reason: `entity mentioned ${count}× in primary results`,
+      });
+    }
+  }
+
+  // Broaden if budget-bound and no cliff visible
+  if (saturation.budgetBound && scoreDistribution.shape !== "cliff") {
+    followUps.push({
+      kind: "broaden",
+      target: sanitizeFollowUpTarget(`increase token_budget to ${tokenBudget * 2}`),
+      reason: "budget exhausted without a relevance cliff — more useful results likely exist",
+    });
+  }
+
+  // Drill if primary dominated by one domain and no domain filter was set
+  if (!hadDomainFilter && primaryResults.length >= 3) {
+    const domainCounts = new Map<string, number>();
+    for (const r of primaryResults) {
+      const d = r.memory.domain as string | null;
+      if (d) domainCounts.set(d, (domainCounts.get(d) ?? 0) + 1);
+    }
+    const total = primaryResults.length;
+    for (const [domain, count] of domainCounts.entries()) {
+      if (count / total >= 0.7 && domainCounts.size > 1) {
+        // Suggest drilling into a different domain that appears but is under-represented
+        for (const [otherDomain, otherCount] of domainCounts.entries()) {
+          if (otherDomain !== domain && otherCount > 0) {
+            followUps.push({
+              kind: "drill",
+              target: sanitizeFollowUpTarget(otherDomain),
+              reason: `primary is ${Math.round((count / total) * 100)}% ${domain}; ${otherDomain} may be under-sampled`,
+            });
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  return followUps;
+}
 
 // --- Permanence scoring ---
 
@@ -183,11 +353,17 @@ function referenceTokenCount(cr: ContextReference): number {
   return estimateTokens(cr.snippet) + 5;
 }
 
-function packHierarchical(
+interface PackHierarchicalOutput {
+  result: Omit<HierarchicalResult, "meta"> & { meta: Omit<ContextMeta, "saturation" | "scoreDistribution" | "coverage" | "suggestedFollowUps"> & { format: "hierarchical" } };
+  primaryResults: ExpandedResult[];
+  budgetBound: boolean;
+}
+
+function packHierarchicalRaw(
   results: ExpandedResult[],
   tokenBudget: number,
   entityProfiles?: EntityProfileSummary[],
-): HierarchicalResult {
+): PackHierarchicalOutput {
   // Budget allocation: primary 50%, profiles 15%, secondary 25%, references 10%
   const hasProfiles = entityProfiles && entityProfiles.length > 0;
   const primaryBudget = Math.floor(tokenBudget * 0.50);
@@ -196,15 +372,21 @@ function packHierarchical(
   const referencesBudget = Math.floor(tokenBudget * (hasProfiles ? 0.10 : 0.20));
 
   const primary: ContextMemory[] = [];
+  const primaryResults: ExpandedResult[] = [];
   let primaryTokens = 0;
   let idx = 0;
+  let budgetBound = false;
 
   // Fill primary (full detail + connections)
   while (idx < results.length) {
     const cm = buildContextMemory(results[idx]);
     const tokens = memoryTokenCount(cm);
-    if (primaryTokens + tokens > primaryBudget && primary.length > 0) break;
+    if (primaryTokens + tokens > primaryBudget && primary.length > 0) {
+      budgetBound = true;
+      break;
+    }
     primary.push(cm);
+    primaryResults.push(results[idx]);
     primaryTokens += tokens;
     idx++;
   }
@@ -215,7 +397,10 @@ function packHierarchical(
   while (idx < results.length) {
     const cs = buildContextSummary(results[idx]);
     const tokens = summaryTokenCount(cs);
-    if (secondaryTokens + tokens > secondaryBudget && secondary.length > 0) break;
+    if (secondaryTokens + tokens > secondaryBudget && secondary.length > 0) {
+      budgetBound = true;
+      break;
+    }
     secondary.push(cs);
     secondaryTokens += tokens;
     idx++;
@@ -227,7 +412,10 @@ function packHierarchical(
   while (idx < results.length) {
     const cr = buildContextReference(results[idx]);
     const tokens = referenceTokenCount(cr);
-    if (referenceTokens + tokens > referencesBudget && references.length > 0) break;
+    if (referenceTokens + tokens > referencesBudget && references.length > 0) {
+      budgetBound = true;
+      break;
+    }
     references.push(cr);
     referenceTokens += tokens;
     idx++;
@@ -240,7 +428,10 @@ function packHierarchical(
     const includedProfiles: EntityProfileSummary[] = [];
     for (const profile of entityProfiles) {
       const tokens = estimateTokens(profile.summary) + 15;
-      if (profileTokens + tokens > profileBudget && includedProfiles.length > 0) break;
+      if (profileTokens + tokens > profileBudget && includedProfiles.length > 0) {
+        budgetBound = true;
+        break;
+      }
       includedProfiles.push(profile);
       profileTokens += tokens;
     }
@@ -249,26 +440,47 @@ function packHierarchical(
     }
   }
 
+  if (idx < results.length) budgetBound = true;
+
+  const returnedMemoryIds: string[] = [];
+  for (const cm of primary) returnedMemoryIds.push(cm.id);
+  for (const cs of secondary) returnedMemoryIds.push(cs.id);
+  for (const cr of references) returnedMemoryIds.push(cr.id);
+
   return {
-    primary: { memories: primary, tokenCount: primaryTokens },
-    secondary: { summaries: secondary, tokenCount: secondaryTokens },
-    references: { items: references, tokenCount: referenceTokens },
-    ...(profilesSection ? { entityProfiles: profilesSection } : {}),
-    meta: {
-      totalMatches: results.length,
-      tokenBudget,
-      tokensUsed: primaryTokens + secondaryTokens + referenceTokens + profileTokens,
-      format: "hierarchical",
+    result: {
+      primary: { memories: primary, tokenCount: primaryTokens },
+      secondary: { summaries: secondary, tokenCount: secondaryTokens },
+      references: { items: references, tokenCount: referenceTokens },
+      ...(profilesSection ? { entityProfiles: profilesSection } : {}),
+      returnedMemoryIds,
+      meta: {
+        totalMatches: results.length,
+        tokenBudget,
+        tokensUsed: primaryTokens + secondaryTokens + referenceTokens + profileTokens,
+        format: "hierarchical",
+      },
     },
+    primaryResults,
+    budgetBound,
   };
 }
 
-function packNarrative(
+interface PackNarrativeOutput {
+  result: Omit<NarrativeResult, "meta"> & { meta: Omit<ContextMeta, "saturation" | "scoreDistribution" | "coverage" | "suggestedFollowUps"> & { format: "narrative" } };
+  primaryResults: ExpandedResult[];
+  budgetBound: boolean;
+}
+
+function packNarrativeRaw(
   results: ExpandedResult[],
   tokenBudget: number,
-): NarrativeResult {
+): PackNarrativeOutput {
   const lines: string[] = [];
+  const returnedMemoryIds: string[] = [];
+  const primaryResults: ExpandedResult[] = [];
   let tokensUsed = 0;
+  let budgetBound = false;
   const headerTokens = estimateTokens("You know the following about this topic:");
   tokensUsed += headerTokens;
   lines.push("You know the following about this topic:");
@@ -283,8 +495,13 @@ function packNarrative(
     const conf = mem.confidence as number;
     line += ` [${(conf * 100).toFixed(0)}% confidence]`;
     const lineTokens = estimateTokens(line);
-    if (tokensUsed + lineTokens > fullDetailBudget && idx > 0) break;
+    if (tokensUsed + lineTokens > fullDetailBudget && idx > 0) {
+      budgetBound = true;
+      break;
+    }
     lines.push(line);
+    returnedMemoryIds.push(mem.id as string);
+    primaryResults.push(results[idx]);
     tokensUsed += lineTokens;
     idx++;
   }
@@ -296,8 +513,12 @@ function packNarrative(
     const content = mem.content as string;
     const line = `- ${content.length > 80 ? content.slice(0, 77) + "..." : content}`;
     const lineTokens = estimateTokens(line);
-    if (tokensUsed + lineTokens > summaryBudget && idx > 0) break;
+    if (tokensUsed + lineTokens > summaryBudget && idx > 0) {
+      budgetBound = true;
+      break;
+    }
     lines.push(line);
+    returnedMemoryIds.push(mem.id as string);
     tokensUsed += lineTokens;
     idx++;
   }
@@ -305,19 +526,25 @@ function packNarrative(
   // Remaining count
   const remaining = results.length - idx;
   if (remaining > 0) {
+    budgetBound = true;
     const footer = `Also relevant: ${remaining} additional ${remaining === 1 ? "memory" : "memories"} available via memory_search.`;
     lines.push(footer);
     tokensUsed += estimateTokens(footer);
   }
 
   return {
-    text: lines.join("\n"),
-    meta: {
-      totalMatches: results.length,
-      tokenBudget,
-      tokensUsed,
-      format: "narrative",
+    result: {
+      text: lines.join("\n"),
+      returnedMemoryIds,
+      meta: {
+        totalMatches: results.length,
+        tokenBudget,
+        tokensUsed,
+        format: "narrative",
+      },
     },
+    primaryResults,
+    budgetBound,
   };
 }
 
@@ -367,8 +594,33 @@ export async function contextSearch(
   // Re-sort by adjusted score
   filtered.sort((a, b) => b.score - a.score);
 
+  const rawScores = filtered.map((r) => r.score);
+  const scoreDistribution = computeScoreDistribution(rawScores);
+
   if (format === "narrative") {
-    return packNarrative(filtered, tokenBudget);
+    const { result, primaryResults, budgetBound } = packNarrativeRaw(filtered, tokenBudget);
+    const saturation: Saturation = {
+      budgetBound,
+      budgetUsedPct: tokenBudget > 0 ? Math.min(1, result.meta.tokensUsed / tokenBudget) : 0,
+    };
+    const coverage = computeCoverage(primaryResults);
+    const suggestedFollowUps = computeSuggestedFollowUps(
+      primaryResults,
+      saturation,
+      scoreDistribution,
+      tokenBudget,
+      Boolean(options.domain),
+    );
+    return {
+      ...result,
+      meta: {
+        ...result.meta,
+        saturation,
+        scoreDistribution,
+        coverage,
+        suggestedFollowUps,
+      },
+    };
   }
 
   // Fetch entity profiles for unique entity names in results
@@ -394,5 +646,28 @@ export async function contextSearch(
     }
   }
 
-  return packHierarchical(filtered, tokenBudget, profiles);
+  const { result, primaryResults, budgetBound } = packHierarchicalRaw(filtered, tokenBudget, profiles);
+  const saturation: Saturation = {
+    budgetBound,
+    budgetUsedPct: tokenBudget > 0 ? Math.min(1, result.meta.tokensUsed / tokenBudget) : 0,
+  };
+  const coverage = computeCoverage(primaryResults);
+  const suggestedFollowUps = computeSuggestedFollowUps(
+    primaryResults,
+    saturation,
+    scoreDistribution,
+    tokenBudget,
+    Boolean(options.domain),
+  );
+
+  return {
+    ...result,
+    meta: {
+      ...result.meta,
+      saturation,
+      scoreDistribution,
+      coverage,
+      suggestedFollowUps,
+    },
+  };
 }

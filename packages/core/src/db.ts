@@ -250,6 +250,38 @@ async function runMigrations(client: Client): Promise<void> {
     `);
   });
 
+  await runMigration(client, "add_context_retrievals_and_feedback", async () => {
+    await client.executeMultiple(`
+      ALTER TABLE memories ADD COLUMN referenced_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE memories ADD COLUMN noise_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE memories ADD COLUMN last_referenced_at TEXT;
+      CREATE TABLE IF NOT EXISTS context_retrievals (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        agent_id TEXT,
+        agent_name TEXT,
+        query TEXT NOT NULL,
+        query_hash TEXT,
+        query_redacted TEXT,
+        token_budget INTEGER NOT NULL,
+        format TEXT NOT NULL,
+        filters_json TEXT,
+        tokens_used INTEGER NOT NULL DEFAULT 0,
+        returned_memory_ids_json TEXT NOT NULL,
+        saturation_json TEXT,
+        score_distribution_json TEXT,
+        created_at TEXT NOT NULL,
+        rated_at TEXT,
+        referenced_memory_ids_json TEXT,
+        noise_memory_ids_json TEXT,
+        notes TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_context_retrievals_user ON context_retrievals(user_id);
+      CREATE INDEX IF NOT EXISTS idx_context_retrievals_created ON context_retrievals(created_at);
+      CREATE INDEX IF NOT EXISTS idx_context_retrievals_rated ON context_retrievals(rated_at) WHERE rated_at IS NULL;
+    `);
+  });
+
   await runMigration(client, "fts_add_entity_name", async () => {
     // Drop old FTS table and triggers, then recreate with entity_name column
     await client.executeMultiple(`

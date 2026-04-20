@@ -15,10 +15,15 @@ export const memories = sqliteTable("memories", {
   confirmedCount: integer("confirmed_count").notNull().default(0),
   correctedCount: integer("corrected_count").notNull().default(0),
   mistakeCount: integer("mistake_count").notNull().default(0),
+  /** @deprecated semantics: "retrieval count" — incremented on any memory_context/memory_search hit.
+   *  The true "cited in response" signal lives in referencedCount. Kept as-is to avoid migration churn. */
   usedCount: integer("used_count").notNull().default(0),
+  referencedCount: integer("referenced_count").notNull().default(0),
+  noiseCount: integer("noise_count").notNull().default(0),
   learnedAt: text("learned_at"),
   confirmedAt: text("confirmed_at"),
   lastUsedAt: text("last_used_at"),
+  lastReferencedAt: text("last_referenced_at"),
   deletedAt: text("deleted_at"),
   hasPiiFlag: integer("has_pii_flag").notNull().default(0),
   entityType: text("entity_type"),
@@ -112,4 +117,26 @@ export const cleanupDismissals = sqliteTable("cleanup_dismissals", {
   action: text("action").notNull(), // 'dismissed' | 'resolved'
   resolutionNote: text("resolution_note"),
   createdAt: text("created_at").notNull(),
+});
+
+export const contextRetrievals = sqliteTable("context_retrievals", {
+  id: text("id").primaryKey(),
+  userId: text("user_id"),
+  agentId: text("agent_id"),
+  agentName: text("agent_name"),
+  query: text("query").notNull(),
+  queryHash: text("query_hash"),
+  queryRedacted: text("query_redacted"),
+  tokenBudget: integer("token_budget").notNull(),
+  format: text("format").notNull(),
+  filtersJson: text("filters_json"),
+  tokensUsed: integer("tokens_used").notNull().default(0),
+  returnedMemoryIdsJson: text("returned_memory_ids_json").notNull(),
+  saturationJson: text("saturation_json"),
+  scoreDistributionJson: text("score_distribution_json"),
+  createdAt: text("created_at").notNull(),
+  ratedAt: text("rated_at"),
+  referencedMemoryIdsJson: text("referenced_memory_ids_json"),
+  noiseMemoryIdsJson: text("noise_memory_ids_json"),
+  notes: text("notes"),
 });
