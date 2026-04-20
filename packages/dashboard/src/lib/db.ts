@@ -1376,3 +1376,148 @@ export async function getDismissedKeys(userId?: string | null): Promise<Set<stri
   });
   return new Set(result.rows.map(r => r.suggestion_key as string));
 }
+
+// --- Retrievals (memory_context telemetry) ---
+
+export interface RetrievalRow {
+  id: string;
+  user_id: string | null;
+  agent_id: string | null;
+  agent_name: string | null;
+  query_redacted: string | null;
+  token_budget: number;
+  format: string;
+  tokens_used: number;
+  returned_memory_ids_json: string;
+  saturation_json: string | null;
+  score_distribution_json: string | null;
+  created_at: string;
+  rated_at: string | null;
+  referenced_memory_ids_json: string | null;
+  noise_memory_ids_json: string | null;
+  notes: string | null;
+}
+
+export async function getRetrievals(
+  opts: { limit?: number; onlyUnrated?: boolean } = {},
+  userId?: string | null,
+): Promise<RetrievalRow[]> {
+  const client = await getClient();
+  const uf = userFilter(userId);
+  const limit = opts.limit ?? 100;
+  const where: string[] = [];
+  if (uf.clause) where.push(uf.clause.replace(/^ AND /, ""));
+  if (opts.onlyUnrated) where.push("rated_at IS NULL");
+
+  const sql = `SELECT id, user_id, agent_id, agent_name, query_redacted, token_budget,
+                      format, tokens_used, returned_memory_ids_json, saturation_json,
+                      score_distribution_json, created_at, rated_at,
+                      referenced_memory_ids_json, noise_memory_ids_json, notes
+               FROM context_retrievals
+               ${where.length ? "WHERE " + where.join(" AND ") : ""}
+               ORDER BY created_at DESC
+               LIMIT ?`;
+  const result = await client.execute({ sql, args: [...uf.args, limit] });
+  return result.rows as unknown as RetrievalRow[];
+}
+
+export async function getRetrievalBudgetHistogram(
+  userId?: string | null,
+): Promise<{ bucket: string; count: number; boundCount: number }[]> {
+  const client = await getClient();
+  const uf = userFilter(userId);
+  const buckets: [string, number, number][] = [
+    ["≤1000", 0, 1000],
+    ["1001-2500", 1001, 2500],
+    ["2501-5000", 2501, 5000],
+    ["5001-10000", 5001, 10000],
+    [">10000", 10001, Number.MAX_SAFE_INTEGER],
+  ];
+  const out: { bucket: string; count: number; boundCount: number }[] = [];
+  for (const [label, lo, hi] of buckets) {
+    const r = await client.execute({
+      sql: `SELECT COUNT(*) as total,
+                   SUM(CASE WHEN saturation_json LIKE '%"budgetBound":true%' THEN 1 ELSE 0 END) as bound
+            FROM context_retrievals
+            WHERE token_budget BETWEEN ? AND ?${uf.clause}`,
+      args: [lo, hi, ...uf.args],
+    });
+    const row = r.rows[0] as unknown as { total: number; bound: number };
+    out.push({ bucket: label, count: row.total ?? 0, boundCount: row.bound ?? 0 });
+  }
+  return out;
+}
+
+export interface UtilityCleanupCandidate {
+  id: string;
+  content: string;
+  used_count: number;
+  referenced_count: number;
+  noise_count: number;
+  confidence: number;
+  permanence: string | null;
+  learned_at: string | null;
+}
+
+/**
+ * Memories that keep getting retrieved but never cited.
+ * used_count >= 5 AND referenced_count == 0 AND noise_count >= 2.
+ */
+export async function getRetrievedButNeverUseful(
+  userId?: string | null,
+): Promise<UtilityCleanupCandidate[]> {
+  const client = await getClient();
+  const uf = userFilter(userId);
+  const r = await client.execute({
+    sql: `SELECT id, content, used_count, referenced_count, noise_count, confidence, permanence, learned_at
+          FROM memories
+          WHERE deleted_at IS NULL
+            AND used_count >= 5 AND referenced_count = 0 AND noise_count >= 2${uf.clause}
+          ORDER BY noise_count DESC, used_count DESC
+          LIMIT 50`,
+    args: uf.args,
+  });
+  return r.rows as unknown as UtilityCleanupCandidate[];
+}
+
+/**
+ * Frequently cited memories that aren't pinned — candidates for canonicalizing.
+ * referenced_count >= 3 AND permanence != 'canonical'.
+ */
+export async function getProvenUsefulUnpinned(
+  userId?: string | null,
+): Promise<UtilityCleanupCandidate[]> {
+  const client = await getClient();
+  const uf = userFilter(userId);
+  const r = await client.execute({
+    sql: `SELECT id, content, used_count, referenced_count, noise_count, confidence, permanence, learned_at
+          FROM memories
+          WHERE deleted_at IS NULL
+            AND referenced_count >= 3
+            AND (permanence IS NULL OR permanence != 'canonical')${uf.clause}
+          ORDER BY referenced_count DESC
+          LIMIT 50`,
+    args: uf.args,
+  });
+  return r.rows as unknown as UtilityCleanupCandidate[];
+}
+
+/**
+ * Inconsistent signal — cited at least once, flagged as noise at least once.
+ */
+export async function getInconsistentSignal(
+  userId?: string | null,
+): Promise<UtilityCleanupCandidate[]> {
+  const client = await getClient();
+  const uf = userFilter(userId);
+  const r = await client.execute({
+    sql: `SELECT id, content, used_count, referenced_count, noise_count, confidence, permanence, learned_at
+          FROM memories
+          WHERE deleted_at IS NULL
+            AND referenced_count >= 1 AND noise_count >= 1${uf.clause}
+          ORDER BY (referenced_count + noise_count) DESC
+          LIMIT 50`,
+    args: uf.args,
+  });
+  return r.rows as unknown as UtilityCleanupCandidate[];
+}

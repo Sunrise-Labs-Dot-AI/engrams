@@ -43,6 +43,41 @@ function recencyBoost(learnedAt: string | null): number {
   return 1.0 + Math.max(0, 0.1 * (1 - ageDays / 30));
 }
 
+/**
+ * Utility-based ranking boost from agent feedback.
+ * Gated behind LODIS_UTILITY_RANKING=1.
+ *
+ * Formula: 1 + 0.08*ln(referenced+1) - 0.05*ln(noise+1), clamped to [0.7, 1.5].
+ *
+ * Noise penalty only applies when noise_count >= 3 AND noise spans >= 2 distinct
+ * retrievals — one bad session should not demote a memory. The distinct-retrieval
+ * count is looked up on-demand via context_retrievals.noise_memory_ids_json.
+ */
+export async function utilityBoost(
+  client: Client,
+  memoryId: string,
+  referencedCount: number,
+  noiseCount: number,
+): Promise<number> {
+  let boost = 1 + 0.08 * Math.log(referencedCount + 1);
+
+  if (noiseCount >= 3) {
+    // Count distinct retrievals that flagged this memory as noise
+    const r = await client.execute({
+      sql: `SELECT COUNT(*) as c FROM context_retrievals
+            WHERE noise_memory_ids_json IS NOT NULL
+              AND noise_memory_ids_json LIKE ?`,
+      args: [`%"${memoryId}"%`],
+    });
+    const distinctRetrievals = ((r.rows[0] as unknown as { c: number } | undefined)?.c) ?? 0;
+    if (distinctRetrievals >= 2) {
+      boost -= 0.05 * Math.log(noiseCount + 1);
+    }
+  }
+
+  return Math.max(0.7, Math.min(1.5, boost));
+}
+
 // --- Graph Expansion ---
 
 async function expandConnections(
@@ -205,19 +240,33 @@ export async function hybridSearch(
     scores.set(id, (scores.get(id) ?? 0) + 1 / (RRF_K + rank + 1));
   });
 
-  // 4. Apply confidence weighting and recency boost
+  // 4. Apply confidence weighting, recency boost, and optional utility boost
+  const utilityRankingEnabled = process.env.LODIS_UTILITY_RANKING === "1";
   for (const [id, rawScore] of scores.entries()) {
     const memResult = await client.execute({
-      sql: `SELECT confidence, learned_at FROM memories WHERE id = ? AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
+      sql: `SELECT confidence, learned_at, referenced_count, noise_count FROM memories WHERE id = ? AND deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
       args: userId ? [id, userId] : [id],
     });
-    const mem = memResult.rows[0] as unknown as { confidence: number; learned_at: string | null } | undefined;
+    const mem = memResult.rows[0] as unknown as {
+      confidence: number;
+      learned_at: string | null;
+      referenced_count: number;
+      noise_count: number;
+    } | undefined;
     if (mem) {
-      // Confidence boost: 0.5x (confidence=0) to 1.0x (confidence=1.0)
       const confidenceBoost = 0.5 + (mem.confidence as number) * 0.5;
-      // Recency boost: 1.1x (today) to 1.0x (30+ days)
       const recency = recencyBoost(mem.learned_at as string | null);
-      scores.set(id, rawScore * confidenceBoost * recency);
+      let finalScore = rawScore * confidenceBoost * recency;
+      if (utilityRankingEnabled) {
+        const uBoost = await utilityBoost(
+          client,
+          id,
+          mem.referenced_count ?? 0,
+          mem.noise_count ?? 0,
+        );
+        finalScore *= uBoost;
+      }
+      scores.set(id, finalScore);
     }
   }
 
