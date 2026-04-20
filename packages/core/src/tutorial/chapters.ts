@@ -79,17 +79,27 @@ export const CHAPTERS: Chapter[] = [
         heading: "How hybrid ranking works",
         body: "Every search runs two queries in parallel: FTS5 keyword search and sqlite-vec cosine similarity over 384-dim embeddings. Results merge via Reciprocal Rank Fusion (k=60), then get boosted by confidence and recency. Graph expansion adds up to 3 hops for related memories.",
       },
+      {
+        heading: "Close the loop",
+        body: "memory_context returns rate_with_this_id plus suggestedFollowUps and a saturation signal. After the agent answers, it calls memory_rate_context with referenced (IDs cited) and noise (IDs filtered). Ratings drive the +0.02 used-bump on confidence and feed optional utility ranking — so Lodis learns which memories were actually useful, not just retrieved.",
+      },
     ],
     tools: [
       { name: "memory_search", blurb: "Hybrid ranked search with domain, confidence, and entity filters." },
-      { name: "memory_context", blurb: "Token-budget-aware retrieval. Returns hierarchical or narrative output." },
+      { name: "memory_context", blurb: "Token-budget-aware retrieval. Returns a retrievalId plus saturation and suggested follow-ups." },
       { name: "memory_briefing", blurb: "Entity profile summary with 24h cache — best for people/projects/places." },
+      { name: "memory_rate_context", blurb: "Rate a prior memory_context retrieval. Reports referenced and noise IDs — closes the loop." },
     ],
     tryItNext: [
       {
         toolName: "memory_search",
         naturalLanguage: "Search for the memory you just wrote",
         exampleInvocation: "memory_search({ query: \"Anthropic\" })",
+      },
+      {
+        toolName: "memory_rate_context",
+        naturalLanguage: "After a context search, rate which memories you actually used",
+        exampleInvocation: "memory_rate_context({ retrievalId: \"abc\", referenced: [\"id1\"], noise: [\"id2\"] })",
       },
     ],
   },
@@ -125,31 +135,35 @@ export const CHAPTERS: Chapter[] = [
   {
     id: "permissions",
     title: "Agent permissions",
-    oneLiner: "Per-agent read/write access, scoped by domain — so Cursor can't read your therapy notes.",
+    oneLiner: "Agent-centric scoping — Open or Isolated, plus sensitive-domain guardrails.",
     dashboardAnchor: "/agents",
     sections: [
       {
-        heading: "Why permissions",
-        body: "Not every agent deserves full access to your memory. Cursor probably needs code context. Your journaling agent needs personal context. Your work-task agent needs neither. Lodis enforces this at every read and write path via checkPermission.",
+        heading: "Open or Isolated",
+        body: "Every agent has a mode. Open (the default) inherits every domain. Isolated starts with a wildcard deny and only reads the domains you allowlist via chips. Switching modes is one toggle on the /agents page.",
       },
       {
-        heading: "How to set permissions",
-        body: "memory_set_permissions grants or revokes read/write access per agent, per domain. Domains are free-form strings you assign at write time. An agent with no explicit permission falls through to the default policy.",
-        codeExample: "memory_set_permissions({\n  agent_id: \"cursor\",\n  domain: \"work\",\n  can_read: true,\n  can_write: true\n})",
+        heading: "Presets",
+        body: "Three one-click presets: Work (code + task domains only), Personal (journal + people only), Lockdown (read-nothing baseline). Presets apply atomically via libsql client.batch — prior rules survive if any insert fails.",
       },
       {
-        heading: "Managing permissions visually",
-        body: "The dashboard /agents page lists every agent that has ever written a memory, with a grid of checkboxes for read/write across every domain. Revoke access with one click — the next read from that agent returns nothing for that domain.",
+        heading: "Sensitive domains",
+        body: "Mark any domain sensitive in the dashboard and it lands in the sensitive_domains table. The first time a new agent tries to write there, memory_write auto-inserts a block row plus an audit event — no silent leaks. Granting allow-access later requires a confirmation modal.",
+        codeExample: "# dashboard → /agents → domain → mark sensitive\n# next time a new agent writes there:\n#   → agent_permissions row inserted (can_write=0)\n#   → memory_events row logs the auto-block",
+      },
+      {
+        heading: "The MCP primitive",
+        body: "memory_set_permissions still exists as the low-level tool for advanced users — grant or revoke read/write per (agent, domain) without the UI. Use it from scripts, or when the dashboard isn't running.",
       },
     ],
     tools: [
-      { name: "memory_set_permissions", blurb: "Per-agent read/write access control by domain." },
-      { name: "memory_list_domains", blurb: "List every domain with memory counts." },
+      { name: "memory_set_permissions", blurb: "Per-agent read/write access control by domain. The low-level primitive behind the /agents UI." },
+      { name: "memory_list_domains", blurb: "List every domain with memory counts — useful before applying a preset." },
     ],
     tryItNext: [
       {
         toolName: "memory_set_permissions",
-        naturalLanguage: "Restrict this agent to read-only on a specific domain",
+        naturalLanguage: "Block this agent from writing to a domain",
         exampleInvocation: "memory_set_permissions({ agent_id: \"claude\", domain: \"personal\", can_read: true, can_write: false })",
       },
     ],

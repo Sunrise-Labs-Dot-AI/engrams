@@ -22,9 +22,9 @@ export default function HowItWorksPage() {
           tool&apos;s.
         </h1>
         <p className="text-sm text-[var(--text-dim)] flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span>27 MCP tools</span>
+          <span>30 MCP tools</span>
           <span aria-hidden="true">·</span>
-          <span>105 tests passing</span>
+          <span>128 tests passing</span>
           <span aria-hidden="true">·</span>
           <span>MIT open source</span>
         </p>
