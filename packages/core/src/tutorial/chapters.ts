@@ -73,7 +73,7 @@ export const CHAPTERS: Chapter[] = [
       {
         heading: "Three search modes",
         body: "memory_search returns ranked memories. memory_context returns a token-budget-aware pack for building a response. memory_briefing returns a pre-computed entity profile (24h cache) — best for 'tell me about Sarah' questions.",
-        codeExample: "memory_search({ query: \"Lodis\" })\nmemory_context({ query: \"what am I working on?\", token_budget: 2000 })\nmemory_briefing({ entity_name: \"Mill\" })",
+        codeExample: "memory_search({ query: \"Lodis\" })\nmemory_context({ query: \"what am I working on?\", token_budget: 6000 })\nmemory_briefing({ entity_name: \"Mill\" })",
       },
       {
         heading: "How hybrid ranking works",
