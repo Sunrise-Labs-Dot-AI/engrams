@@ -564,7 +564,7 @@ export async function contextSearch(
     includeArchived?: boolean;
   } = {},
 ): Promise<ContextPackedResult> {
-  const tokenBudget = options.tokenBudget ?? 2000;
+  const tokenBudget = options.tokenBudget ?? 6000;
   const format = options.format ?? "hierarchical";
 
   // Search with generous limit — we'll pack to budget
