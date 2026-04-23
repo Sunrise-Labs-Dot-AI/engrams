@@ -145,10 +145,27 @@ export class LocalReranker implements RerankerProvider {
  * and is designed to be `modal deploy`-ed with keep_warm=1 for <1s cold-start.
  */
 export class HttpReranker implements RerankerProvider {
+  /**
+   * Default timeout. BGE-reranker-base on CPU takes ~70-150ms per candidate
+   * pair; at the Lodis pre-rerank pool ceiling of 200 candidates that's
+   * 14-30s depending on CPU allocation and batching efficiency. 5s (the
+   * original default) fired the client-side abort long before the server
+   * finished — manifested live 2026-04-23 as meta.rerankerEngaged=false
+   * with meta.rerankerError="The operation was aborted due to timeout"
+   * on every memory_context call with a full candidate pool. 20s gives
+   * warm-warm calls enough headroom while still failing fast on a genuine
+   * hang.
+   *
+   * For production workloads, set LODIS_RERANKER_TIMEOUT_MS=30000 or cut
+   * the candidate pool upstream (lower Stage 1 limit) or move the rerank
+   * server to GPU — a T4 cuts 200-pair rerank to <500ms.
+   */
+  private static readonly DEFAULT_TIMEOUT_MS = 20000;
+
   constructor(
     private readonly endpoint: string,
     private readonly apiKey?: string,
-    private readonly timeoutMs: number = 5000,
+    private readonly timeoutMs: number = HttpReranker.DEFAULT_TIMEOUT_MS,
   ) {}
 
   async rerank(

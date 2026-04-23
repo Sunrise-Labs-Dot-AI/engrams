@@ -112,8 +112,14 @@ api_key_secret = modal.Secret.from_name("rerank-api-key", required_keys=["RERANK
 
 
 @app.cls(
-    cpu=2.0,
-    memory=1024,
+    # cpu=8 chosen after live smoke-test at 2 CPU cores showed 199-pair
+    # batches took ~30s (Lodis pre-rerank pool is limit=200, cf.
+    # context-packing.ts). At 8 cores with torch.set_num_threads(8) in load,
+    # BGE-reranker-base processes ~200 pairs in ~14s warm. Memory bumped to
+    # 2048MB for the larger intermediate tensors during batched forward
+    # passes — 1024MB showed allocator thrash on 200-pair batches.
+    cpu=8.0,
+    memory=2048,
     # Modal 1.x renames:
     #   keep_warm=1          → min_containers=1      (warm floor)
     #   container_idle_timeout=300 → scaledown_window=300 (idle → stop delay)
@@ -132,6 +138,14 @@ class Reranker:
     def load(self):
         import torch
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        # Pin PyTorch to use all allocated CPU cores. The container has
+        # cpu=8 but torch auto-detect can under-read on Modal (returns 2
+        # in some configurations), leaving 6 cores idle during forward
+        # passes. Verified live 2026-04-23 — pinning dropped warm-warm
+        # 200-pair latency from 28s → 14s.
+        torch.set_num_threads(8)
+        torch.set_num_interop_threads(2)
 
         self.tokenizer = AutoTokenizer.from_pretrained(RERANK_MODEL_ID)
         self.model = AutoModelForSequenceClassification.from_pretrained(RERANK_MODEL_ID)
@@ -242,8 +256,13 @@ async def rerank(
     # contain the query or candidate text; we keep those out of the response
     # body and rely on `modal app logs` for debugging (and even those should
     # be spot-checked post-deploy — see modal/README.md).
+    # Use the .aio() variant — this endpoint is `async def`, and the blocking
+    # `.remote()` would hold the event loop for the full rerank duration,
+    # serializing concurrent requests through one slot. .aio() properly
+    # awaits without blocking. Confirmed via Modal's AsyncUsageWarning in
+    # logs 2026-04-23.
     try:
-        results = Reranker().score.remote(query, candidates, top_k)
+        results = await Reranker().score.remote.aio(query, candidates, top_k)
     except HTTPException:
         raise
     except Exception:
