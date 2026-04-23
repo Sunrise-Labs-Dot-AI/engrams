@@ -582,7 +582,23 @@ export async function contextSearch(
 ): Promise<ContextPackedResult> {
   const tokenBudget = options.tokenBudget ?? 6000;
   const format = options.format ?? "hierarchical";
-  const rerankerEnabled = process.env.LODIS_RERANKER_DISABLED !== "1";
+
+  // Reranker enablement — environment-aware default with explicit overrides:
+  //   • LODIS_RERANKER_DISABLED=1 → always off  (evaluated first — safer)
+  //   • LODIS_RERANKER_ENABLED=1  → always on
+  //   • otherwise: ON for long-lived Node (default), OFF on Vercel
+  //
+  // Rationale: the in-process BGE-reranker incurs ~13-15s cold-start per
+  // Lambda invocation. That's unacceptable UX on a serverless function.
+  // Local-first users (`npx lodis`, long-lived Node) keep the reranker on
+  // by default. Hosted/Vercel gets a clean "Stage 2 disabled" state until
+  // Phase 2 (HTTP-backed RerankerProvider → warm service) lands. DISABLED
+  // wins over ENABLED to avoid silent override of a stale kill-switch.
+  const rerankerEnabled = (() => {
+    if (process.env.LODIS_RERANKER_DISABLED === "1") return false;
+    if (process.env.LODIS_RERANKER_ENABLED === "1") return true;
+    return process.env.VERCEL !== "1"; // default off on Vercel, on elsewhere
+  })();
 
   // Stage 1: hybrid retrieval.
   // When reranker is enabled, fetch a wider candidate set (limit=200) and skip

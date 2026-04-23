@@ -14,6 +14,21 @@ const nextConfig = {
     "sqlite-vec",
   ],
 
+  // Force-include onnxruntime-node + its native .node binaries in the
+  // Vercel serverless deploy for the MCP route. serverExternalPackages
+  // tells Next not to bundle the module, but Next 15's file-tracing can
+  // miss pnpm-nested native binaries (the package entry + *.node files
+  // live under node_modules/.pnpm/onnxruntime-node@*/...). Without this,
+  // the MCP Lambda fails on import with "Cannot find module 'onnxruntime-
+  // node'" — confirmed live on deploy 2026-04-21 via the Layer 1
+  // reranker-diagnostic fields added in PR #78.
+  outputFileTracingIncludes: {
+    "/api/mcp/route": [
+      "../../node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/**/*",
+      "../../node_modules/.pnpm/@huggingface+transformers@*/node_modules/@huggingface/transformers/**/*",
+    ],
+  },
+
   env: {
     NEXT_PUBLIC_CLERK_SIGN_IN_URL: "/sign-in",
     NEXT_PUBLIC_CLERK_SIGN_UP_URL: "/sign-up",
