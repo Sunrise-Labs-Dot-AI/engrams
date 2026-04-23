@@ -127,7 +127,7 @@ export function startHttpApi(
           .get();
         if (!existing) return json(res, { error: "Not found" }, 404);
 
-        const newConfidence = applyCorrect();
+        const newConfidence = applyCorrect(existing.confidence);
         const timestamp = now();
         await db.update(memories)
           .set({

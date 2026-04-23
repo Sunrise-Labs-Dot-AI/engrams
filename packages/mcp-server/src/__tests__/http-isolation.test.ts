@@ -171,7 +171,8 @@ describe("HTTP API multi-tenant isolation", () => {
     it("user A can correct own memory", async () => {
       const { status, data } = await post(baseA, `/api/memory/${MEM_A}/correct`, { content: "Updated A" });
       expect(status).toBe(200);
-      expect(data.newConfidence).toBe(0.5);
+      // Preceding confirm pushed MEM_A to 0.99; applyCorrect floors at 0.9 and caps at current, so stays 0.99.
+      expect(data.newConfidence).toBe(0.99);
     });
 
     it("user A cannot correct user B memory", async () => {
@@ -184,8 +185,8 @@ describe("HTTP API multi-tenant isolation", () => {
     it("user A can flag own memory", async () => {
       const { status, data } = await post(baseA, `/api/memory/${MEM_A}/flag`);
       expect(status).toBe(200);
-      // confidence was 0.5 after correct, so 0.5 - 0.15 = 0.35
-      expect(data.newConfidence).toBe(0.35);
+      // confidence was 0.99 after correct (floor preserved prior confirm), so 0.99 - 0.15 = 0.84
+      expect(data.newConfidence).toBeCloseTo(0.84);
     });
 
     it("user A cannot flag user B memory", async () => {

@@ -166,7 +166,7 @@ Memories have a `permanence` tier that controls decay and search behavior:
 
 ### Updates
 - confirm: confidence → 0.99
-- correct: confidence → 0.50 (reset to neutral on correction)
+- correct: confidence → max(current, 0.9) (correction is a user-stated truth assertion; never drops, caps at current if already higher)
 - mistake: max(confidence - 0.15, 0.10)
 - used: min(confidence + 0.02, 0.99)
 - pin: confidence → max(current, 0.95), permanence → "canonical" (immune to decay)

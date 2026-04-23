@@ -34,8 +34,21 @@ describe("applyConfirm", () => {
 });
 
 describe("applyCorrect", () => {
-  it("resets confidence to 0.50", () => {
-    expect(applyCorrect()).toBe(0.5);
+  it("floors at 0.9 (stated-truth floor)", () => {
+    expect(applyCorrect(0.1)).toBe(0.9);
+    expect(applyCorrect(0.5)).toBe(0.9);
+    expect(applyCorrect(0.9)).toBe(0.9);
+  });
+
+  it("leaves higher confidence unchanged", () => {
+    expect(applyCorrect(0.95)).toBe(0.95);
+    expect(applyCorrect(0.99)).toBe(0.99);
+  });
+
+  it("is idempotent when called repeatedly", () => {
+    const once = applyCorrect(0.5);
+    const twice = applyCorrect(once);
+    expect(twice).toBe(once);
   });
 });
 

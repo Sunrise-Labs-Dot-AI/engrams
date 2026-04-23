@@ -1652,7 +1652,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
   server.tool(
     "memory_correct",
-    "Replace a memory's content with corrected information. Call this when the user says a memory is wrong and provides the right answer. Resets confidence to 0.50.",
+    "Replace a memory's content with corrected information. Call this when the user says a memory is wrong and provides the right answer. Raises confidence to at least 0.90 (stated-truth floor); leaves it alone if already higher. Use memory_confirm (not this) to verify an already-correct memory.",
     {
       id: z.string().describe("Memory ID to correct"),
       content: z.string().describe("The corrected content"),
@@ -1675,7 +1675,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
         return textResult({ error: `Agent is not allowed to write to domain "${existing.domain}"` });
       }
 
-      const newConfidence = applyCorrect();
+      const newConfidence = applyCorrect(existing.confidence);
       const timestamp = now();
 
       await db.update(memories)
