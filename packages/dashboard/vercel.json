@@ -2,5 +2,11 @@
   "buildCommand": "cd ../.. && pnpm build --filter=@lodis/dashboard",
   "outputDirectory": ".next",
   "framework": "nextjs",
-  "regions": ["sfo1"]
+  "regions": ["sfo1"],
+  "functions": {
+    "src/app/api/mcp/route.ts": {
+      "maxDuration": 60,
+      "includeFiles": "../../node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/**/*"
+    }
+  }
 }
