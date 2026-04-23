@@ -49,7 +49,7 @@ export async function applyConfidenceDecay(client: Client, userId?: string | nul
   const now = new Date();
 
   const result = await client.execute({
-    sql: `SELECT id, confidence, used_count, confirmed_count, last_used_at, confirmed_at, learned_at,
+    sql: `SELECT id, confidence, used_count, confirmed_count, corrected_count, last_used_at, confirmed_at, learned_at,
                  permanence, entity_type, content, detail
           FROM memories
           WHERE deleted_at IS NULL AND confidence > ?${userId ? ' AND user_id = ?' : ''}`,
@@ -61,6 +61,7 @@ export async function applyConfidenceDecay(client: Client, userId?: string | nul
     confidence: number;
     used_count: number;
     confirmed_count: number;
+    corrected_count: number;
     last_used_at: string | null;
     confirmed_at: string | null;
     learned_at: string | null;
@@ -89,8 +90,8 @@ export async function applyConfidenceDecay(client: Client, userId?: string | nul
 
     if (periods <= 0) continue;
 
-    // Never-used, never-confirmed memories decay 5x faster
-    const neverEngaged = mem.used_count === 0 && mem.confirmed_count === 0;
+    // Never-used, never-confirmed, never-corrected memories decay 5x faster
+    const neverEngaged = mem.used_count === 0 && mem.confirmed_count === 0 && (mem.corrected_count ?? 0) === 0;
     let rate = neverEngaged ? UNUSED_DECAY_RATE : DECAY_RATE;
 
     // Ephemeral memories decay 2x faster
@@ -142,8 +143,8 @@ export function applyConfirm(_current: number): number {
   return 0.99;
 }
 
-export function applyCorrect(): number {
-  return 0.5;
+export function applyCorrect(current: number): number {
+  return Math.max(current, 0.9);
 }
 
 export function applyMistake(current: number): number {

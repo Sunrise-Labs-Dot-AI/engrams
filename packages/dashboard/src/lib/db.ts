@@ -4,6 +4,7 @@ import { createClient, type Client } from "@libsql/client";
 import { resolve } from "path";
 import { homedir } from "os";
 import { randomBytes } from "crypto";
+import { applyCorrect } from "@lodis/core/confidence";
 
 // --- Types ---
 
@@ -1057,7 +1058,7 @@ export async function correctMemoryById(id: string, content: string, detail?: st
   if (existing.rows.length === 0) return null;
 
   const row = existing.rows[0];
-  const newConfidence = Math.min(Math.max(row.confidence as number, 0.85), 0.99);
+  const newConfidence = applyCorrect(row.confidence as number);
   const timestamp = now();
   const newDetail = detail !== undefined ? detail : row.detail;
   await client.execute({

@@ -36,6 +36,10 @@
     "./tutorial": {
       "import": "./dist/tutorial/index.js",
       "types": "./dist/tutorial/index.d.ts"
+    },
+    "./confidence": {
+      "import": "./dist/confidence.js",
+      "types": "./dist/confidence.d.ts"
     }
   },
   "scripts": {

@@ -25,11 +25,12 @@ async function insertMemory(
     confirmedAt?: string | null;
     usedCount?: number;
     confirmedCount?: number;
+    correctedCount?: number;
   } = {},
 ) {
   await client.execute({
-    sql: `INSERT INTO memories (id, content, domain, source_agent_id, source_agent_name, source_type, confidence, learned_at, last_used_at, confirmed_at, used_count, confirmed_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    sql: `INSERT INTO memories (id, content, domain, source_agent_id, source_agent_name, source_type, confidence, learned_at, last_used_at, confirmed_at, used_count, confirmed_count, corrected_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     args: [
       id, `Memory ${id}`, "general", "agent1", "test", "stated",
       confidence, learnedAt,
@@ -37,6 +38,7 @@ async function insertMemory(
       opts.confirmedAt ?? null,
       opts.usedCount ?? 0,
       opts.confirmedCount ?? 0,
+      opts.correctedCount ?? 0,
     ],
   });
 }
@@ -136,6 +138,19 @@ describe("applyConfidenceDecay", () => {
     await insertMemory(client, "m1", 0.9, daysAgo(90), { confirmedAt: daysAgo(5), confirmedCount: 1 });
     const decayed = await applyConfidenceDecay(client);
     expect(decayed).toBe(0);
+  });
+
+  it("corrected memory decays at standard rate, not 5x unused rate", async () => {
+    // A memory that was corrected (even without uses or confirms) has been engaged.
+    // It should decay at the normal DECAY_RATE, not the 5x UNUSED_DECAY_RATE.
+    await insertMemory(client, "m1", 0.9, daysAgo(65), { correctedCount: 1 });
+    await applyConfidenceDecay(client);
+
+    const result = await client.execute({ sql: `SELECT confidence FROM memories WHERE id = 'm1'`, args: [] });
+    const conf = result.rows[0].confidence as number;
+    // 2 periods * DECAY_RATE (0.01) = 0.02 decay → 0.88, NOT 2 * UNUSED_DECAY_RATE (0.05) = 0.10 decay → 0.80
+    expect(conf).toBeCloseTo(0.9 - DECAY_RATE * 2);
+    expect(conf).toBeGreaterThanOrEqual(0.88);
   });
 
   it("unused memory reaches low confidence in ~6 months", async () => {
