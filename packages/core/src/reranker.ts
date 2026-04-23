@@ -185,16 +185,25 @@ export class HttpReranker implements RerankerProvider {
       ? (AbortSignal as unknown as { any(s: AbortSignal[]): AbortSignal }).any([options.signal, timeoutSignal])
       : timeoutSignal;
 
-    const res = await fetch(this.endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        query,
-        candidates,
-        ...(options.topK !== undefined ? { topK: options.topK } : {}),
-      }),
-      signal,
-    });
+    let res: Response;
+    try {
+      res = await fetch(this.endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          query,
+          candidates,
+          ...(options.topK !== undefined ? { topK: options.topK } : {}),
+        }),
+        signal,
+      });
+    } catch (err) {
+      // Wrap abort / network errors so the configured timeout is visible in
+      // the error message surfaced via `meta.rerankerError`. Without this,
+      // "aborted due to timeout" is ambiguous between a 5s / 20s / 30s cap.
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`HttpReranker (timeoutMs=${this.timeoutMs}, candidates=${candidates.length}): ${msg}`);
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "<unreadable>");
       throw new Error(`HttpReranker ${res.status}: ${body.slice(0, 300)}`);
