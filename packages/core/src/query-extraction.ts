@@ -28,10 +28,24 @@ export interface QueryExtractionResult {
 }
 
 // Standard English stopwords — articles, auxiliaries, pronouns, prepositions,
-// common interrogatives. DELIBERATELY excludes load-bearing-in-queries terms
-// like `first/second/third/one/two/three`, `specific/also/any/some/all`,
-// `market/role/person/name/area/county/town/thing/item/part/something` — a
-// real user query might legitimately pivot on any of those.
+// common interrogatives. DELIBERATELY excludes:
+//
+//   (a) Load-bearing query terms: `first/second/third/one/two/three`,
+//       `specific/also/any/some/all`, `market/role/person/name/area/county/
+//       town/thing/item/part/something` — a real user query might legitimately
+//       pivot on any of those.
+//
+//   (b) Negation + contrastive conjunctions: `not/no/nor/without/except` — per
+//       Saboteur-5 in the code-review for PR #84. "What decisions did NOT
+//       involve Magda?" would extract to "decisions involve Magda" (semantic
+//       INVERSION) if we dropped "not". FTS5 still sees the original query but
+//       the dense vec path embeds the extracted short form, so dropping
+//       negation flips the retrieved candidate set.
+//
+// To add a stopword: drop it into this Set in the appropriate row, then
+// verify `pnpm --filter @lodis/core test query-extraction` — especially the
+// "preserves negation" and "keeps load-bearing query terms" tests which guard
+// the two categories above.
 const STOPWORDS = new Set([
   // articles / demonstratives
   "the", "a", "an", "this", "that", "these", "those",
@@ -45,11 +59,11 @@ const STOPWORDS = new Set([
   "will", "would", "could", "should", "may", "might", "must", "can", "shall",
   // interrogatives
   "which", "what", "who", "whom", "whose", "when", "where", "why", "how",
-  // prepositions
+  // prepositions (NB: "without" intentionally NOT here — it's negation-like)
   "about", "into", "onto", "upon", "over", "under", "in", "on", "at", "to",
-  "from", "with", "without", "within", "through", "across",
-  // conjunctions
-  "and", "or", "but", "if", "so", "not", "as", "by", "for", "of", "nor", "yet",
+  "from", "with", "within", "through", "across",
+  // conjunctions (NB: "not"/"nor"/"but" intentionally NOT here — they flip query semantics)
+  "and", "or", "if", "so", "as", "by", "for", "of", "yet",
   // pronouns
   "it", "its", "they", "their", "them", "theirs", "he", "his", "him", "she",
   "her", "hers", "you", "your", "yours", "we", "our", "ours", "us", "me",
@@ -162,10 +176,16 @@ export function extractSignalTerms(query: string): QueryExtractionResult {
   const capped = kept.length > 24 ? kept.slice(0, 24) : kept;
 
   if (process.env.LODIS_QUERY_EXTRACTION_DEBUG === "1") {
+    // Emit counts + mode only — NOT the token values. Per Security-5 on PR
+    // #84: if this debug var is ever set on a hosted deployment to diagnose a
+    // retrieval regression, logs flow to Vercel/Datadog/Sentry where tokens
+    // like `Marin`, `Tiburon`, `Person_0091` leak user search intent to
+    // operators who have log access but not DB access. Counts alone tell us
+    // whether extraction engaged, without exposing content.
     const dropped = rawTokens.length - capped.length;
     // eslint-disable-next-line no-console
     console.error(
-      `[lodis] query-extraction: ${originalTokens} tokens → ${capped.length} kept (${dropped} dropped). Effective: "${capped.join(" ")}"`,
+      `[lodis] query-extraction: mode=keywords ${originalTokens} tokens → ${capped.length} kept (${dropped} dropped)`,
     );
   }
 

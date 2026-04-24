@@ -139,6 +139,31 @@ describe("extractSignalTerms", () => {
       expect(tokens).toContain("issue");
       expect(tokens).toContain("agent");
     });
+
+    it("preserves negation — 'not' / 'no' / 'nor' / 'but' / 'without' must survive (Saboteur-5 regression guard)", () => {
+      // If we drop "not", the query "decisions that did NOT involve Magda"
+      // extracts to "decisions involve Magda" — semantic inversion flipping
+      // the dense-retrieval candidate set toward the opposite of the intent.
+      // These tokens are explicitly NOT in STOPWORDS; this test locks it in.
+      const q =
+        "What decisions did Person_0091 make that did not involve Magda last quarter but also not Sarah";
+      const result = extractSignalTerms(q);
+      expect(result.mode).toBe("keywords");
+      const tokens = result.effectiveQuery.split(/\s+/).map((t) => t.toLowerCase());
+      expect(tokens).toContain("not");
+      expect(tokens).toContain("but");
+    });
+
+    it("preserves 'without' and 'except' as negation-adjacent", () => {
+      const q =
+        "Find memories about Person_0091's work travel without any flight delays except in November where delays happened";
+      const result = extractSignalTerms(q);
+      expect(result.mode).toBe("keywords");
+      const tokens = result.effectiveQuery.split(/\s+/).map((t) => t.toLowerCase());
+      expect(tokens).toContain("without");
+      // "except" is also not a stopword — should survive
+      expect(tokens).toContain("except");
+    });
   });
 
   describe("fallback behavior", () => {

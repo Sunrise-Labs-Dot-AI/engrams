@@ -211,11 +211,15 @@ describe("contextSearch query-extraction telemetry", () => {
     }
   });
 
-  it("omits queryExtraction from meta when extraction is disabled (default)", async () => {
-    // No env flag → default off → extraction runs in 'disabled' mode → meta
-    // omits the field entirely so callers don't need to special-case it.
+  it("always emits queryExtraction meta, even when extraction is disabled (post-review fix for observable rollback)", async () => {
+    // Per code-review for PR #84 (Saboteur-1 / New-Hire-3 findings): meta.queryExtraction
+    // must always be present so dashboards can distinguish "rollback engaged"
+    // from "retrieval path never deployed." Mode "disabled" is a valid state,
+    // not an absent field.
     const res = await contextSearch(client, "a long query with many words about something");
-    expect(res.meta.queryExtraction).toBeUndefined();
+    expect(res.meta.queryExtraction).toBeDefined();
+    expect(res.meta.queryExtraction?.mode).toBe("disabled");
+    expect(typeof res.meta.queryExtraction?.originalTokens).toBe("number");
   });
 
   it("reports mode=passthrough for short queries when extraction is enabled", async () => {

@@ -21,11 +21,25 @@ function memoryRerankText(r: ExpandedResult): string {
 }
 
 /**
- * Resolve the reranker topK (how many memories the cross-encoder returns).
- * Default 60 (raised from 40 per W1c in retrieval-wave-1 plan). Override via
- * LODIS_RERANK_TOPK env var. Reranker scores all 200 candidates regardless;
- * topK only bounds the output. Clamped to 1-200; invalid values fall back
- * to default. Exported for testability.
+ * Resolve the reranker topK — how many memories the cross-encoder returns
+ * (NOT how many it scores; it scores all 200 candidates regardless).
+ *
+ * Default: **60**, raised from 40 based on Pinecone and Cohere retrieval-
+ * system guidance that top-30-to-50 is the minimum-useful rerank output for
+ * two-stage pipelines, with top-50-to-100 being the common production sweet
+ * spot. See `handoff-retrieval-research-2026-04-24.md` §Reranking-SOTA for
+ * the source links.
+ *
+ * Upper bound: **200**, because Modal's reference reranker service
+ * (`modal/rerank_app.py`) caps candidate input at 200 and `hybridSearch`
+ * passes at most 200 to the reranker — so the reranker will never RETURN
+ * more than it RECEIVED. Asking for topK > 200 is nonsensical.
+ *
+ * Invalid / out-of-range values (zero, negative, >200, NaN, empty string)
+ * fall BACK to default rather than saturating at the bound — saturating
+ * can mask a config typo (`LODIS_RERANK_TOPK=6000` silently becomes 200);
+ * falling back makes the typo observable via `queryExtraction` telemetry
+ * showing the default value in use.
  */
 export function resolveRerankTopK(): number {
   const raw = process.env.LODIS_RERANK_TOPK;
@@ -651,9 +665,11 @@ export async function contextSearch(
   // We track `rerankerEngaged` and `rerankerError` in ContextMeta so callers
   // / dashboards can detect silent fallback — the bare catch in the v0 of
   // this code made Stage-2 regressions undetectable from the response.
-  // rerankTopK default raised 40 → 60 (W1c in retrieval-wave-1 plan). Reranker
-  // scores all 200 candidates regardless; topK only bounds how many come out.
-  // No extra reranker latency. Env-configurable for experimentation/rollback.
+  // Default 60 (raised from 40); see resolveRerankTopK() above for the
+  // rationale + handoff-retrieval-research-2026-04-24.md §Reranking-SOTA
+  // for the published guidance this is based on. Reranker scores all 200
+  // candidates regardless; topK only bounds how many come out. No extra
+  // reranker latency. Env-configurable for experimentation/rollback.
   const rerankTopK = resolveRerankTopK();
   let reranked: ExpandedResult[];
   let rerankerEngaged: boolean | undefined;
@@ -730,9 +746,7 @@ export async function contextSearch(
         suggestedFollowUps,
         rerankerEngaged,
         ...(rerankerError ? { rerankerError } : {}),
-        ...(extraction.mode !== "disabled"
-          ? { queryExtraction: { mode: extraction.mode, originalTokens: extraction.originalTokens } }
-          : {}),
+        queryExtraction: { mode: extraction.mode, originalTokens: extraction.originalTokens },
       },
     };
   }
@@ -784,9 +798,7 @@ export async function contextSearch(
       suggestedFollowUps,
       rerankerEngaged,
       ...(rerankerError ? { rerankerError } : {}),
-      ...(extraction.mode !== "disabled"
-        ? { queryExtraction: { mode: extraction.mode, originalTokens: extraction.originalTokens } }
-        : {}),
+      queryExtraction: { mode: extraction.mode, originalTokens: extraction.originalTokens },
     },
   };
 }

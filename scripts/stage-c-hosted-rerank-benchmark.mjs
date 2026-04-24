@@ -23,9 +23,21 @@ import os from "node:os";
 import path from "node:path";
 
 // ---------- Config ----------
-const ART = "/Users/jamesheath/Documents/Claude/Projects/Anthropic Take Home Demo/simulation";
+// LODIS_MRCR_DATA_DIR must point at a directory containing data/memories.json
+// and needles-public.json in the MRCR fixture format. This script is dev-only
+// and requires a local fixture corpus that isn't in the repo — fail loudly if
+// the env var is unset rather than hardcoding any one developer's path.
+const ART = process.env.LODIS_MRCR_DATA_DIR;
+if (!ART) {
+  console.error("Missing LODIS_MRCR_DATA_DIR env var. Point it at a directory containing data/memories.json and needles-public.json.");
+  process.exit(1);
+}
 const memoriesPath = path.join(ART, "data/memories.json");
 const needlesPath = path.join(ART, "needles-public.json");
+if (!fs.existsSync(memoriesPath) || !fs.existsSync(needlesPath)) {
+  console.error(`LODIS_MRCR_DATA_DIR=${ART} does not contain data/memories.json and/or needles-public.json.`);
+  process.exit(1);
+}
 const MCP_URL = process.env.LODIS_MCP_URL ?? "https://app.getengrams.com/api/mcp";
 const BENCH_DOMAIN = "mrcr-bench";
 const SOURCE_AGENT_ID = "stage-c-bench";
@@ -44,6 +56,16 @@ function loadApiKey() {
   const keyPath = path.join(os.homedir(), ".lodis-mrcr-run/hosted-api-key.txt");
   if (!fs.existsSync(keyPath)) {
     console.error(`Missing API key. Generate at https://app.getengrams.com/settings and write to ${keyPath} (mode 0600), or set $LODIS_HOSTED_API_KEY.`);
+    process.exit(1);
+  }
+  // Enforce mode 0600 — refuse to read group/world-readable key files.
+  // Per Security-2 on PR #84: the comment promised mode 0600 but the code
+  // didn't verify. If a teammate accidentally stored the token with `echo` or
+  // `cat > file` (default mode 0644), silently reading it exposes the write-all
+  // credential to any same-host process. Fail loud instead.
+  const mode = fs.statSync(keyPath).mode & 0o777;
+  if (mode & 0o077) {
+    console.error(`${keyPath} has insecure mode ${mode.toString(8)}. Expected 0600. Run: chmod 0600 ${keyPath}`);
     process.exit(1);
   }
   return fs.readFileSync(keyPath, "utf8").trim();

@@ -244,7 +244,7 @@ describe("search", () => {
       const result = await hybridSearch(client, longQuery, { limit: 10, expand: false });
 
       expect(result.extraction.mode).toBe("disabled");
-      expect(result.extraction.effectiveQuery).toBe(longQuery);
+      expect(result.extraction.originalTokens).toBeGreaterThan(0);
     });
 
     it("extraction enabled + short query: passthrough, both paths see same string", async () => {
@@ -255,7 +255,7 @@ describe("search", () => {
       const result = await hybridSearch(client, shortQuery, { limit: 10, expand: false });
 
       expect(result.extraction.mode).toBe("passthrough");
-      expect(result.extraction.effectiveQuery).toBe(shortQuery);
+      expect(result.extraction.originalTokens).toBe(4);
     });
 
     it("extraction enabled + long query: engages keywords mode; original query still routed to FTS for signal preservation", async () => {
@@ -267,34 +267,46 @@ describe("search", () => {
       const result = await hybridSearch(client, longQuery, { limit: 10, expand: false });
 
       expect(result.extraction.mode).toBe("keywords");
-      // Short form differs from original (stopwords dropped).
-      expect(result.extraction.effectiveQuery).not.toBe(longQuery);
-      expect(result.extraction.effectiveQuery.length).toBeLessThan(longQuery.length);
+      // extraction summary exposes only {mode, originalTokens} — effectiveQuery
+      // is deliberately omitted from the public return to avoid logging the
+      // rewritten query (PII risk, Saboteur-7). mode="keywords" is sufficient
+      // evidence that the short form differs from the full query.
+      expect(result.extraction.originalTokens).toBeGreaterThan(10);
       // Memory still found — both paths had enough signal to retrieve it.
       expect(result.results.length).toBeGreaterThan(0);
       expect(result.results.map((r) => r.id)).toContain("m1");
     });
 
-    it("cache key disambiguates two long queries that collapse to the same short form (Saboteur-1 regression guard)", async () => {
+    it("cache key disambiguates two long queries (Saboteur-1 regression guard; strengthened per Saboteur-9)", async () => {
       process.env.LODIS_QUERY_EXTRACTION_ENABLED = "1";
-      await insertMemory(client, "m1", "Marin County property search");
-      await insertMemory(client, "m2", "Golden Gate Bridge architecture");
+      await insertMemory(client, "m1", "Marin County property search memo from realtor");
 
-      // Two queries with the same rare tokens but different stopwords/verbs.
-      // Both extract to approximately the same short form.
+      // Two queries with similar rare tokens but distinguishable content.
+      // The PREVIOUS version of this test asserted only `cached === false` for
+      // both calls — which would pass trivially even if the cache key were
+      // buggy, because the SECOND call reads the lastModified at-call-time
+      // and finds it doesn't match any prior entry when last_modified was bumped
+      // in between. This version asserts that the cache ACTUALLY holds distinct
+      // entries AND that serving each query uses its own slot.
       const q1 = "What are the specific details about the Marin County property search I am doing";
       const q2 = "Have I started the Marin County property search for my family move";
 
       const r1 = await hybridSearch(client, q1, { limit: 10, expand: false });
+      // r1 should miss cache (first call ever for this key).
+      expect(r1.cached).toBe(false);
+      // Second call with SAME query should be served from cache (proves the
+      // first write populated the cache at all).
+      const r1cached = await hybridSearch(client, q1, { limit: 10, expand: false });
+      expect(r1cached.cached).toBe(true);
+      // r2 is a DIFFERENT original query, even though stopwords differ. The
+      // cache key includes originalQuery — this must NOT collide with r1's
+      // slot. So r2 should miss cache (as if it's the first time) even though
+      // r1's slot is warm in the same process.
       const r2 = await hybridSearch(client, q2, { limit: 10, expand: false });
-
-      // Both should be keywords mode. Cache slot MUST be distinct — the
-      // originalQuery field in the cache key prevents collision.
+      expect(r2.cached).toBe(false);
+      // Both should have engaged extraction; both should hit mode=keywords.
       expect(r1.extraction.mode).toBe("keywords");
       expect(r2.extraction.mode).toBe("keywords");
-      // r1 is cached on first call; r2 should NOT hit r1's cache entry.
-      expect(r1.cached).toBe(false);
-      expect(r2.cached).toBe(false);
     });
   });
 });
