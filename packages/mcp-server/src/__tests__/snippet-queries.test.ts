@@ -356,6 +356,115 @@ describe("memory_progress_summary", () => {
     });
   });
 
+  it("sets truncated=true when the window contains more than the scan limit", async () => {
+    await withServer(dbPath, async (client, dbUrl) => {
+      const db = createClient({ url: dbUrl });
+      await registerDomains(db, ["work"]);
+      const base = Date.now();
+      const stmts = [] as { sql: string; args: (string | number)[] }[];
+      const nowIso = new Date().toISOString();
+      // 1005 rows > 1000-row scan limit; all in the same window.
+      for (let i = 0; i < 1005; i++) {
+        stmts.push({
+          sql: `INSERT INTO memories (id, content, domain, source_agent_id, source_agent_name, source_type, confidence, learned_at, event_ts, entity_type, entity_name, structured_data, permanence, expires_at)
+                VALUES (?, ?, 'work', 'cap', 'Cap', 'observed', 1.0, ?, ?, 'snippet', 'Progress: Work', ?, 'ephemeral', datetime('now','+60 day'))`,
+          args: [
+            randomBytes(16).toString("hex"),
+            `row ${i}`,
+            nowIso,
+            new Date(base - i * 1000).toISOString(),
+            JSON.stringify({ snippet_type: "advanced", life_domain: "work", source_system: "test", event_timestamp: new Date(base - i * 1000).toISOString() }),
+          ],
+        });
+      }
+      await db.batch(stmts, "write");
+      db.close();
+
+      const r = parseResult<{ total: number; truncated: boolean; scan_limit: number }>(
+        await client.callTool({
+          name: "memory_progress_summary",
+          arguments: {
+            date_from: new Date(base - 2 * 60 * 60 * 1000).toISOString(),
+            date_to: new Date(base + 60_000).toISOString(),
+          },
+        }),
+      );
+      expect(r.total).toBe(1000);
+      expect(r.truncated).toBe(true);
+      expect(r.scan_limit).toBe(1000);
+    });
+  });
+
+  it("life_domains filter is applied in SQL so the scan cap cannot be consumed by out-of-scope rows", async () => {
+    await withServer(dbPath, async (client, dbUrl) => {
+      const db = createClient({ url: dbUrl });
+      await registerDomains(db, ["atlas", "work"]);
+      const now = Date.now();
+      // 3 atlas rows (the target) + 10 work rows that would otherwise dominate.
+      for (let i = 0; i < 10; i++) {
+        await insertSnippet(db, {
+          domain: "work",
+          event_ts: new Date(now - i * 1000).toISOString(),
+          snippet_type: "advanced",
+        });
+      }
+      for (let i = 0; i < 3; i++) {
+        await insertSnippet(db, {
+          domain: "atlas",
+          event_ts: new Date(now - 20_000 - i * 1000).toISOString(),
+          snippet_type: "advanced",
+        });
+      }
+      db.close();
+
+      const r = parseResult<{ total: number; by_life_domain: Record<string, number> }>(
+        await client.callTool({
+          name: "memory_progress_summary",
+          arguments: {
+            date_from: new Date(now - 60_000).toISOString(),
+            date_to: new Date(now + 60_000).toISOString(),
+            life_domains: ["atlas"],
+          },
+        }),
+      );
+      expect(r.total).toBe(3);
+      expect(r.by_life_domain).toEqual({ atlas: 3 });
+    });
+  });
+
+  it("include_archived_domains=true counts snippets tagged to an archived domain", async () => {
+    await withServer(dbPath, async (client, dbUrl) => {
+      const db = createClient({ url: dbUrl });
+      await registerDomains(db, ["atlas"]);
+      await insertSnippet(db, { domain: "atlas", event_ts: new Date().toISOString(), snippet_type: "stalled" });
+      await db.execute({ sql: `UPDATE domains SET archived = 1, archived_at = datetime('now') WHERE name = 'atlas'`, args: [] });
+      db.close();
+
+      const def = parseResult<{ total: number }>(
+        await client.callTool({
+          name: "memory_progress_summary",
+          arguments: {
+            date_from: new Date(Date.now() - 60_000).toISOString(),
+            date_to: new Date(Date.now() + 60_000).toISOString(),
+          },
+        }),
+      );
+      expect(def.total).toBe(0);
+
+      const incl = parseResult<{ total: number }>(
+        await client.callTool({
+          name: "memory_progress_summary",
+          arguments: {
+            date_from: new Date(Date.now() - 60_000).toISOString(),
+            date_to: new Date(Date.now() + 60_000).toISOString(),
+            include_archived_domains: true,
+          },
+        }),
+      );
+      expect(incl.total).toBe(1);
+    });
+  });
+
   it("returns a clean empty response for an empty window", async () => {
     await withServer(dbPath, async (client) => {
       const r = parseResult<{

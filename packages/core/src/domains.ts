@@ -1,5 +1,6 @@
 import type { Client } from "@libsql/client";
 
+// 1 leading letter + 0–62 alnum/hyphen = 63 chars max.
 export const DOMAIN_NAME_RE = /^[a-z][a-z0-9-]{0,62}$/;
 
 export interface DomainRow {
@@ -23,6 +24,12 @@ export interface ArchiveDomainInput {
   name: string;
   reason?: string;
   userId?: string | null;
+  /**
+   * Optional logger for audit side-effects. Kept behind a caller-supplied hook
+   * so `@lodis/core` stays portable across runtimes that don't expose
+   * Node's `process` (Workers, Deno, Bun). MCP server injects a stderr logger.
+   */
+  log?: (msg: string) => void;
 }
 
 interface DomainDbRow {
@@ -51,6 +58,9 @@ export function validateDomainName(name: string): string | null {
   if (typeof name !== "string" || name.length === 0) {
     return "Domain name must be a non-empty string.";
   }
+  // The regex enforces both the character class and the 63-char upper bound.
+  // We keep a dedicated "too long" branch so the returned message is actionable
+  // for the common "typed too many characters" case rather than a regex dump.
   if (name.length > 63) {
     return "Domain name must be 63 characters or fewer.";
   }
@@ -123,8 +133,12 @@ export async function registerDomain(
     return { status: "noop", row: existing };
   }
 
-  await client.execute({
-    sql: `INSERT INTO domains (name, description, parent_name, archived, archived_at, created_at, user_id)
+  // `INSERT OR IGNORE` makes the SELECT→INSERT sequence idempotent under
+  // concurrent callers — a racing insert would otherwise raise UNIQUE on
+  // idx_domains_name_user. If the ignore path fires (rowsAffected=0), a
+  // sibling call already created the row, so we treat this call as noop.
+  const insertRes = await client.execute({
+    sql: `INSERT OR IGNORE INTO domains (name, description, parent_name, archived, archived_at, created_at, user_id)
           VALUES (?, ?, ?, 0, NULL, ?, ?)`,
     args: [
       input.name,
@@ -136,6 +150,9 @@ export async function registerDomain(
   });
 
   const row = await getDomain(client, input.name, input.userId ?? null);
+  if (insertRes.rowsAffected === 0) {
+    return { status: "noop", row: row! };
+  }
   return { status: "created", row: row! };
 }
 
@@ -160,8 +177,10 @@ export async function archiveDomain(
     args: [new Date().toISOString(), input.name, input.userId ?? null],
   });
 
-  if (input.reason) {
-    process.stderr.write(`[lodis] domain_archived: name=${input.name} reason=${input.reason}\n`);
+  if (input.reason && input.log) {
+    // Strip newlines / control chars and cap length to defeat log injection.
+    const safeReason = input.reason.replace(/[\r\n\x00-\x1f\x7f]/g, " ").slice(0, 200);
+    input.log(`[lodis] domain_archived: name=${input.name} reason=${safeReason}`);
   }
 
   const row = await getDomain(client, input.name, input.userId ?? null);

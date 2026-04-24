@@ -50,8 +50,6 @@ import {
   validateDomainName,
   registerDomain,
   archiveDomain,
-  isDomainRegistered,
-  isDomainArchived,
   getDomain,
   listDomains,
   evaluateAutoPin,
@@ -913,43 +911,52 @@ Organize memories by life domain: general, work, health, finance, relationships,
     "memory_write_snippet",
     "Write a high-frequency progress event (shipped/advanced/started/stalled/blocked) against a registered life domain. Use this — not memory_write — for structured progress capture from Notion, GitHub, Gmail, calendar pollers, or manual check-ins. Defaults: entityType='snippet', permanence='ephemeral', ttl=60d, confidence=1.0. Auto-pins goal-linked ships (active+180d) and meta.milestone=true (canonical). Dedups on (source_system, source_id, event_timestamp) when source_id is supplied. Rate-limited to 500 per (agent, life_domain) per hour. Call memory_register_domain first if the life_domain is new.\n\nExample: memory_write_snippet({ snippet_type: 'shipped', life_domain: 'work', content: 'Shipped PR #42 adding Foo', source_system: 'github', event_timestamp: '2026-04-24T16:00:00Z', linked_goal_id: 'T4', source_id: 'pr-42', sourceAgentId: 'capture-task', sourceAgentName: 'Progress Capture' })",
     {
+      // Explicit string bounds prevent a caller from filling the DB with
+      // megabyte-scale blobs via the high-frequency snippet path.
       snippet_type: z.enum(["shipped", "advanced", "started", "stalled", "blocked"]).describe("Event classification"),
-      life_domain: z.string().describe("Slug-form life domain (lowercase, hyphens). Must be registered and not archived."),
-      content: z.string().min(1).describe("One-line description of the event"),
-      source_system: z.string().min(1).describe("Origin system (e.g. 'notion', 'github', 'gmail', 'manual')"),
-      event_timestamp: z.string().describe("ISO 8601 timestamp of when the event occurred (display/ordering only; not trusted for audit)"),
-      linked_goal_id: z.string().optional().describe("Goal this event advances"),
-      source_url: z.string().optional().describe("Deep-link back to the source (PR URL, Notion page, etc.)"),
-      source_id: z.string().optional().describe("Stable ID from the source system — when set, enables dedup on (source_system, source_id, event_timestamp)"),
-      actor: z.string().optional().describe("Person who performed the action (may be the user or someone else)"),
-      content_detail: z.string().optional().describe("Extended detail if one line isn't enough"),
-      meta: z.record(z.unknown()).optional().describe("Free-form extension field. Set meta.milestone=true to force canonical pin."),
-      sourceAgentId: z.string().describe("Your agent ID"),
-      sourceAgentName: z.string().describe("Your agent name"),
+      life_domain: z.string().max(63).describe("Slug-form life domain (lowercase, hyphens). Must be registered and not archived."),
+      content: z.string().min(1).max(2000).describe("One-line description of the event (max 2KB)"),
+      source_system: z.string().min(1).max(100).describe("Origin system (e.g. 'notion', 'github', 'gmail', 'manual')"),
+      event_timestamp: z.string().max(40).describe("ISO 8601 timestamp of when the event occurred (display/ordering only; not trusted for audit)"),
+      linked_goal_id: z.string().max(100).optional().describe("Goal this event advances"),
+      source_url: z.string().max(2000).optional().describe("Deep-link back to the source (PR URL, Notion page, etc.)"),
+      source_id: z.string().max(200).optional().describe("Stable ID from the source system — when set, enables dedup on (source_system, source_id, event_timestamp)"),
+      actor: z.string().max(200).optional().describe("Person who performed the action (may be the user or someone else)"),
+      content_detail: z.string().max(8000).optional().describe("Extended detail if one line isn't enough (max 8KB)"),
+      meta: z.record(z.unknown()).optional().describe("Free-form extension field (max 4KB JSON-stringified). Set meta.milestone=true to force canonical pin."),
+      sourceAgentId: z.string().max(100).describe("Your agent ID"),
+      sourceAgentName: z.string().max(100).describe("Your agent name"),
     },
     async (params, extra) => {
       const userId = getUserId(extra as Record<string, unknown>);
 
-      // 1. Permission
-      if (!(await checkPermission(params.sourceAgentId, params.life_domain, "write", userId))) {
-        return textResult({ error: `Agent "${params.sourceAgentId}" is not allowed to write to domain "${params.life_domain}"` });
-      }
-
-      // 2. Validation
+      // 1. Validation — slug shape first, then domain-registry state, then
+      // permission. Order matches the other domain-facing tools
+      // (memory_register_domain / memory_archive_domain) and gives callers the
+      // most specific error for a bad input rather than a generic "not allowed".
       const nameErr = validateDomainName(params.life_domain);
       if (nameErr) return textResult({ error: nameErr });
 
-      if (!(await isDomainRegistered(client, params.life_domain, userId))) {
+      // Single round-trip: `getDomain` gives us both registration state (null →
+      // unregistered) and archive state in one SELECT, halving the domain-
+      // validation DB cost per write.
+      const domainRow = await getDomain(client, params.life_domain, userId);
+      if (!domainRow) {
         return textResult({
           error: "domain_unregistered",
           hint: `Life domain "${params.life_domain}" is not registered. Call memory_register_domain first.`,
         });
       }
-      if (await isDomainArchived(client, params.life_domain, userId)) {
+      if (domainRow.archived) {
         return textResult({
           error: "domain_archived",
           hint: `Life domain "${params.life_domain}" is archived. Call memory_register_domain("${params.life_domain}") to unarchive, or write under a different domain.`,
         });
+      }
+
+      // 2. Permission
+      if (!(await checkPermission(params.sourceAgentId, params.life_domain, "write", userId))) {
+        return textResult({ error: `Agent "${params.sourceAgentId}" is not allowed to write to domain "${params.life_domain}"` });
       }
 
       const eventDate = new Date(params.event_timestamp);
@@ -965,6 +972,15 @@ Organize memories by life domain: general, work, health, finance, relationships,
         return textResult({ error: "event_timestamp_in_future", hint: "event_timestamp must not be more than 1 hour ahead of server time." });
       }
 
+      // `meta` JSON size cap — defends against canonical-pinned megabyte blobs
+      // that survive decay and inflate memory_progress_summary aggregation cost.
+      if (params.meta !== undefined) {
+        const metaSize = JSON.stringify(params.meta).length;
+        if (metaSize > 4000) {
+          return textResult({ error: "meta_too_large", hint: `meta JSON size must be <= 4000 bytes; got ${metaSize}.` });
+        }
+      }
+
       // 3. Rate-limit (unconditional, D4)
       const rateRow = (await client.execute({
         sql: `SELECT COUNT(*) AS c FROM memories
@@ -975,7 +991,10 @@ Organize memories by life domain: general, work, health, finance, relationships,
         args: [params.sourceAgentId, params.life_domain, userId ?? null, userId ?? null],
       })).rows[0] as unknown as { c: number };
       if (rateRow.c >= SNIPPET_RATE_CAP_PER_HOUR) {
-        process.stderr.write(`[lodis] snippet_rate_cap: agent=${params.sourceAgentId} domain=${params.life_domain}\n`);
+        // sourceAgentId is agent-supplied — strip newlines/control chars + cap
+        // length so a caller cannot inject fake log lines or ANSI escapes.
+        const safeAgent = params.sourceAgentId.replace(/[\r\n\x00-\x1f\x7f]/g, " ").slice(0, 100);
+        process.stderr.write(`[lodis] snippet_rate_cap: agent=${safeAgent} domain=${params.life_domain}\n`);
         return textResult({
           error: "snippet_rate_cap_exceeded",
           hint: `Caller must throttle; cap is ${SNIPPET_RATE_CAP_PER_HOUR} per agent per life_domain per hour.`,
@@ -1124,6 +1143,7 @@ Organize memories by life domain: general, work, health, finance, relationships,
     date_from: string;
     date_to: string;
     life_domain?: string;
+    life_domains?: string[];
     linked_goal_id?: string;
     snippet_type?: string;
     include_archived_domains?: boolean;
@@ -1154,6 +1174,11 @@ Organize memories by life domain: general, work, health, finance, relationships,
     if (filters.life_domain !== undefined) {
       sql += ` AND domain = ?`;
       args.push(filters.life_domain);
+    }
+    if (filters.life_domains !== undefined && filters.life_domains.length > 0) {
+      const placeholders = filters.life_domains.map(() => "?").join(",");
+      sql += ` AND domain IN (${placeholders})`;
+      args.push(...filters.life_domains);
     }
     if (filters.linked_goal_id !== undefined) {
       sql += ` AND json_extract(structured_data, '$.linked_goal_id') = ?`;
@@ -1260,12 +1285,13 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
   server.tool(
     "memory_progress_summary",
-    "Single-call rollup of snippet rows in a time window. Returns total, by_life_domain, by_snippet_type (includes zero-count keys), by_goal (with top N per goal), stalled list, and the echoed date_range. Use for weekly reviews where multiple memory_query_progress calls would be N round-trips. Window capped at 366 days.\n\nExample: memory_progress_summary({ date_from: '2026-04-17T00:00:00Z', date_to: '2026-04-24T23:59:59Z', top_per_goal: 3 })",
+    "Single-call rollup of snippet rows in a time window. Returns total, by_life_domain, by_snippet_type (includes zero-count keys), by_goal (with top N per goal), stalled list, date_range, and a truncated flag when the window contained more rows than the summary scanned. Use for weekly reviews where multiple memory_query_progress calls would be N round-trips. Window capped at 366 days.\n\nExample: memory_progress_summary({ date_from: '2026-04-17T00:00:00Z', date_to: '2026-04-24T23:59:59Z', top_per_goal: 3 })",
     {
       date_from: z.string().describe("ISO 8601 lower bound"),
       date_to: z.string().describe("ISO 8601 upper bound"),
-      life_domains: z.array(z.string()).optional().describe("Optional filter to specific domains"),
+      life_domains: z.array(z.string()).max(50).optional().describe("Optional filter to specific domains (max 50)"),
       top_per_goal: z.number().int().min(1).max(10).optional().describe("Top snippets per goal (default 3, max 10)"),
+      include_archived_domains: z.boolean().optional().describe("Include snippets tagged to archived domains (default false)"),
       agentId: z.string().optional().describe("Your agent ID (for permission filtering)"),
     },
     async (params, extra) => {
@@ -1274,25 +1300,23 @@ Organize memories by life domain: general, work, health, finance, relationships,
       if (windowErr) return textResult({ error: windowErr });
 
       const topPerGoal = params.top_per_goal ?? 3;
+      const SUMMARY_SCAN_LIMIT = 1000;
 
-      // Fetch the full window at max(1000, default) — summary scans the whole range, not a paginated view.
-      const rowsAll = await fetchSnippetRange(
+      // Push the life_domains filter into SQL so the 1000-row cap isn't
+      // consumed by out-of-scope domains (which would silently under-count the
+      // requested domains). Registered archived domains are excluded by
+      // default; the caller can opt in.
+      const rows = await fetchSnippetRange(
         {
           date_from: params.date_from,
           date_to: params.date_to,
-          include_archived_domains: false,
-          limit: 1000,
+          life_domains: params.life_domains,
+          include_archived_domains: params.include_archived_domains ?? false,
+          limit: SUMMARY_SCAN_LIMIT,
         },
         params.agentId,
         userId,
       );
-
-      const domainFilter = params.life_domains && params.life_domains.length > 0
-        ? new Set(params.life_domains)
-        : null;
-      const rows = domainFilter
-        ? rowsAll.filter((r) => domainFilter.has(r.life_domain))
-        : rowsAll;
 
       const by_life_domain: Record<string, number> = {};
       const by_snippet_type: Record<string, number> = {
@@ -1318,8 +1342,14 @@ Organize memories by life domain: general, work, health, finance, relationships,
         if (r.snippet_type === "stalled") stalled.push(r);
       }
 
+      // Surface truncation to the caller so aggregates can be flagged as
+      // partial. Agents doing weekly reviews should warn users when this is set.
+      const truncated = rows.length === SUMMARY_SCAN_LIMIT;
+
       return textResult({
         total: rows.length,
+        truncated,
+        scan_limit: SUMMARY_SCAN_LIMIT,
         by_life_domain,
         by_snippet_type,
         by_goal,
@@ -2584,16 +2614,16 @@ Organize memories by life domain: general, work, health, finance, relationships,
       const countByDomain = new Map<string, number>();
       for (const c of counts) countByDomain.set(c.domain, c.count);
 
-      // Step 2: registry rows (scoped to userId).
-      const registryRows = await listDomains(client, {
-        includeArchived: params.include_archived ?? false,
-        userId,
-      });
-      const registryByName = new Map(registryRows.map((r) => [r.name, r]));
+      // Step 2: registry rows. We always fetch the ARCHIVED-INCLUSIVE set so
+      // we can tell whether an orphan is actually an archived-registered row
+      // (and suppress it when include_archived=false). Without this, archiving
+      // a domain would make it reappear as a "registered=false" orphan as long
+      // as any memories still reference it — a silently wrong signal to
+      // callers who use `registered` to decide whether it's safe to write.
+      const allRegistryRows = await listDomains(client, { includeArchived: true, userId });
+      const allRegistryByName = new Map(allRegistryRows.map((r) => [r.name, r]));
+      const includeArchived = params.include_archived ?? false;
 
-      // Step 3: union — registered domains (always included subject to archive
-      // filter) + orphan domains with counts > 0 (not in registry).
-      const seen = new Set<string>();
       const results: Array<{
         domain: string;
         count: number;
@@ -2602,8 +2632,8 @@ Organize memories by life domain: general, work, health, finance, relationships,
         description: string | null;
       }> = [];
 
-      for (const r of registryRows) {
-        seen.add(r.name);
+      for (const r of allRegistryRows) {
+        if (r.archived && !includeArchived) continue;
         results.push({
           domain: r.name,
           count: countByDomain.get(r.name) ?? 0,
@@ -2613,9 +2643,9 @@ Organize memories by life domain: general, work, health, finance, relationships,
         });
       }
       for (const [name, count] of countByDomain) {
-        if (seen.has(name)) continue;
-        // If this orphan happens to match an archived registry row we skipped
-        // above (because include_archived=false), skip the orphan too.
+        // Skip names that are already in the registry (archived or not) — they
+        // were handled above. Only truly unregistered names fall through here.
+        if (allRegistryByName.has(name)) continue;
         results.push({
           domain: name,
           count,
@@ -2672,10 +2702,10 @@ Organize memories by life domain: general, work, health, finance, relationships,
     "memory_archive_domain",
     "Archive a life domain. Active snippets are preserved. Future memory_write_snippet calls to this domain are rejected until it is unarchived via memory_register_domain. Requires write permission on the target domain. Returns status='noop' if the domain is unknown or already archived.\n\nExample: memory_archive_domain({ name: 'phoenix', reason: 'Mill exit complete; domain retired.', sourceAgentId: 'assistant', sourceAgentName: 'Assistant' })",
     {
-      name: z.string().describe("Domain name to archive"),
-      reason: z.string().optional().describe("Free-form reason (stderr-logged, not persisted)"),
-      sourceAgentId: z.string().describe("Your agent ID"),
-      sourceAgentName: z.string().describe("Your agent name"),
+      name: z.string().max(63).describe("Domain name to archive"),
+      reason: z.string().max(500).optional().describe("Free-form reason (stderr-logged, not persisted)"),
+      sourceAgentId: z.string().max(100).describe("Your agent ID"),
+      sourceAgentName: z.string().max(100).describe("Your agent name"),
     },
     async (params, extra) => {
       const userId = getUserId(extra as Record<string, unknown>);
@@ -2685,7 +2715,14 @@ Organize memories by life domain: general, work, health, finance, relationships,
         return textResult({ error: `Agent "${params.sourceAgentId}" is not allowed to write to domain "${params.name}"` });
       }
       try {
-        const r = await archiveDomain(client, { name: params.name, reason: params.reason, userId });
+        const r = await archiveDomain(client, {
+          name: params.name,
+          reason: params.reason,
+          userId,
+          // Injected logger keeps `@lodis/core` portable across non-Node
+          // runtimes while still producing audit output in this server.
+          log: (msg) => { process.stderr.write(msg + "\n"); },
+        });
         await bumpLastModified(client);
         return textResult({ status: r.status, name: params.name });
       } catch (err) {

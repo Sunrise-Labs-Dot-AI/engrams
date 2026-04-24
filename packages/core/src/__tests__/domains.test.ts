@@ -74,6 +74,19 @@ describe("domain registry", () => {
     expect(r.status).toBe("noop");
   });
 
+  it("registerDomain returns noop under a TOCTOU race (concurrent first-writers)", async () => {
+    // Simulates two callers reading existing=null then racing INSERT. The
+    // implementation now uses INSERT OR IGNORE so the loser gets rowsAffected=0
+    // and returns a clean noop instead of throwing a UNIQUE constraint error.
+    const [r1, r2] = await Promise.all([
+      registerDomain(client, { name: "raced" }),
+      registerDomain(client, { name: "raced" }),
+    ]);
+    const statuses = [r1.status, r2.status].sort();
+    // One wins (created), the other loses (noop). Either ordering is acceptable.
+    expect(statuses).toEqual(["created", "noop"]);
+  });
+
   it("archiveDomain archives, and a second archive call is a noop", async () => {
     await registerDomain(client, { name: "atlas" });
     const r1 = await archiveDomain(client, { name: "atlas" });

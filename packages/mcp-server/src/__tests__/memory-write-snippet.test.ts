@@ -400,6 +400,58 @@ describe("memory_write_snippet", () => {
     });
   });
 
+  it("rejects meta JSON larger than 4KB", async () => {
+    await withServer(dbPath, async (client, dbUrl) => {
+      await registerTestDomain(dbUrl, "work");
+      const bigMeta = { junk: "A".repeat(5000) };
+      const raw = await client.callTool({
+        name: "memory_write_snippet",
+        arguments: {
+          snippet_type: "advanced",
+          life_domain: "work",
+          content: "too big",
+          source_system: "manual",
+          event_timestamp: new Date().toISOString(),
+          meta: bigMeta,
+          sourceAgentId: "capture",
+          sourceAgentName: "Capture",
+        },
+      });
+      const r = parseResult<SnippetWriteResult>(raw);
+      expect(r.error).toBe("meta_too_large");
+    });
+  });
+
+  it("returns the slug-validation error before the permission error for a bad domain name", async () => {
+    await withServer(dbPath, async (client, dbUrl) => {
+      // Block the agent on the literal domain "Bad Name" just to prove slug
+      // validation fires first; also seed the slug-valid domain so the write
+      // path clears up to the permission check for it.
+      const db = createClient({ url: dbUrl });
+      await db.execute({
+        sql: `INSERT INTO agent_permissions (agent_id, domain, can_read, can_write) VALUES (?, ?, 1, 0)`,
+        args: ["locked-agent", "Bad Name"],
+      });
+      db.close();
+
+      const raw = await client.callTool({
+        name: "memory_write_snippet",
+        arguments: {
+          snippet_type: "advanced",
+          life_domain: "Bad Name",
+          content: "x",
+          source_system: "manual",
+          event_timestamp: new Date().toISOString(),
+          sourceAgentId: "locked-agent",
+          sourceAgentName: "Locked",
+        },
+      });
+      const r = parseResult<SnippetWriteResult>(raw);
+      expect(r.error).toMatch(/invalid/i);
+      expect(r.error).not.toMatch(/not allowed to write/i);
+    });
+  });
+
   it("enforces rate limit unconditionally (501st rejected even with fresh source_id)", async () => {
     // This test is heavy (~505 writes). Use an isolated DB but limit volume.
     await withServer(dbPath, async (client, dbUrl) => {

@@ -247,6 +247,37 @@ describe("memory_list_domains", () => {
     });
   });
 
+  it("does NOT surface an archived registered domain as an orphan when include_archived=false", async () => {
+    // Regression: previously the orphan loop pushed archived-registered domains
+    // as `registered: false` when include_archived=false, misleading callers.
+    await withServer(dbPath, async (client, dbUrl) => {
+      const db = createClient({ url: dbUrl });
+      await db.execute({
+        sql: `INSERT INTO domains (name, archived, archived_at, created_at) VALUES ('atlas', 1, datetime('now'), datetime('now'))`,
+        args: [],
+      });
+      // A memory still references the archived domain.
+      await db.execute({
+        sql: `INSERT INTO memories (id, content, domain, source_agent_id, source_agent_name, source_type, confidence, learned_at) VALUES (?, 'old snippet', 'atlas', 'x', 'X', 'observed', 1, datetime('now'))`,
+        args: [randomBytes(16).toString("hex")],
+      });
+      db.close();
+
+      const r = parseResult<{ domains: Array<{ domain: string; archived: boolean; registered: boolean }> }>(
+        await client.callTool({ name: "memory_list_domains", arguments: {} }),
+      );
+      // atlas should be completely absent when include_archived=false, NOT present with registered=false.
+      expect(r.domains.find((d) => d.domain === "atlas")).toBeUndefined();
+
+      const all = parseResult<{ domains: Array<{ domain: string; archived: boolean; registered: boolean }> }>(
+        await client.callTool({ name: "memory_list_domains", arguments: { include_archived: true } }),
+      );
+      const atlas = all.domains.find((d) => d.domain === "atlas");
+      expect(atlas?.archived).toBe(true);
+      expect(atlas?.registered).toBe(true);
+    });
+  });
+
   it("surfaces orphan domains (unregistered, present in memories)", async () => {
     await withServer(dbPath, async (client, dbUrl) => {
       const db = createClient({ url: dbUrl });
