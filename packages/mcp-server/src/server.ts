@@ -19,6 +19,7 @@ import {
   generateEmbedding,
   embedTextForShape,
   currentEmbeddingShape,
+  type EmbeddingShape,
   insertEmbedding,
   searchVec,
   hybridSearch,
@@ -676,38 +677,51 @@ Organize memories by life domain: general, work, health, finance, relationships,
         })
         .run();
 
-      // Store embedding (reuse from dedup or generate fresh).
-      // W1a: embed text respects the currently-enabled shape. When
-      // LODIS_CONTEXTUAL_EMBEDDINGS_ENABLED=1, `buildEmbedText` prepends
+      // Store embedding. W1a: embed text respects the currently-enabled shape.
+      // When LODIS_CONTEXTUAL_EMBEDDINGS_ENABLED=1, `buildEmbedText` prepends
       // `[entity_name] [entity_type] [domain] [tags]` to the text fed to
       // MiniLM — improves cross-encoder + vec match on compound queries.
-      // NOTE: dedup similarity above may have used legacy shape; that's
-      // fine — dedup compares raw facts, and the threshold has slack.
+      //
+      // CORRECTNESS: we DISCARD any dedup embedding (computed above from
+      // legacy-shape text) and re-embed under writeShape. Reusing the dedup
+      // vector as the stored corpus vector would produce a shape mismatch —
+      // column says "v1-bracketed" but vector was generated from legacy text.
+      // The migration script would then skip this row as already-at-target,
+      // leaving the shape-vector mismatch permanent. Per Saboteur-3 on PR #86.
+      // Dedup's query embedding is ephemeral search input, not corpus data.
       const writeShape = currentEmbeddingShape();
+      let storedShape: EmbeddingShape | null = null;
       if (vecAvailable) {
         try {
-          if (!embedding) {
-            const embeddingText = embedTextForShape(writeShape, {
-              content: params.content,
-              detail: params.detail ?? null,
-              entity_name: params.entityName ?? null,
-              entity_type: params.entityType ?? null,
-              domain: params.domain ?? "general",
-              structured_data: params.structuredData ?? null,
-            });
-            embedding = await generateEmbedding(embeddingText);
-          }
-          await insertEmbedding(client, id, embedding);
+          const embeddingText = embedTextForShape(writeShape, {
+            content: params.content,
+            detail: params.detail ?? null,
+            entity_name: params.entityName ?? null,
+            entity_type: params.entityType ?? null,
+            domain: params.domain ?? "general",
+            structured_data: params.structuredData ?? null,
+          });
+          const finalEmbedding = await generateEmbedding(embeddingText);
+          await insertEmbedding(client, id, finalEmbedding);
+          // Only record the shape if the embedding actually landed. Per
+          // Saboteur-6 on PR #86: stamping embedding_shape outside this try
+          // block created a shape-vector mismatch when generateEmbedding
+          // throws (e.g. OOM) and the migration would skip the poisoned row.
+          storedShape = writeShape;
         } catch {
-          // Embedding failure is non-fatal
+          // Embedding failure is non-fatal — row still persists without
+          // a vec entry. embedding_shape stays NULL so the next migration
+          // pass retries this row.
         }
       }
-      // Record the shape under which this memory was last embedded — enables
-      // the backfill/rollback scripts to skip already-migrated rows.
-      await client.execute({
-        sql: `UPDATE memories SET embedding_shape = ? WHERE id = ?`,
-        args: [writeShape, id],
-      });
+      if (storedShape !== null) {
+        await client.execute({
+          sql: `UPDATE memories SET embedding_shape = ? WHERE id = ?`,
+          args: [storedShape, id],
+        });
+      }
+      // Discard the dedup-scoped embedding now that it's no longer needed.
+      void embedding;
 
       await db.insert(memoryEvents)
         .values({
@@ -2040,6 +2054,10 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
       // Re-embed if content changed. W1a: use the currently-enabled embed
       // shape so newly-edited memories match the shape of bulk-migrated ones.
+      // The embedding_shape UPDATE lives inside the try block — per
+      // Saboteur-6 / Performance-4 on PR #86, stamping shape on embed failure
+      // would produce a shape-vector mismatch and silently skip the row on
+      // the next migration pass.
       if (params.content !== undefined && vecAvailable) {
         try {
           const writeShape = currentEmbeddingShape();
@@ -2058,7 +2076,8 @@ Organize memories by life domain: general, work, health, finance, relationships,
             args: [writeShape, params.id],
           });
         } catch {
-          // Non-fatal
+          // Non-fatal — embedding_shape stays at its prior value so next
+          // migration pass retries.
         }
       }
 

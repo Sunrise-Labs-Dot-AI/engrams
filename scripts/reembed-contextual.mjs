@@ -157,8 +157,11 @@ const elapsedSec = ((Date.now() - t0) / 1000).toFixed(1);
 console.error(`\nDone in ${elapsedSec}s. processed=${result.processed} skipped=${result.skipped} failed=${result.failed}`);
 
 // ---------- Archive results (IDs + status only; no content) ----------
+// Per Security-3 on PR #86: mode 0600 matches the credentials.json precedent
+// and prevents same-host processes from reading the error messages (which
+// can incidentally include SQLite/libsql error text mentioning row data).
 const archivePath = path.join(os.homedir(), `.lodis-mrcr-run/reembed-${Date.now()}-results.json`);
-fs.mkdirSync(path.dirname(archivePath), { recursive: true });
+fs.mkdirSync(path.dirname(archivePath), { recursive: true, mode: 0o700 });
 fs.writeFileSync(archivePath, JSON.stringify({
   ranAt: new Date().toISOString(),
   shape,
@@ -171,7 +174,7 @@ fs.writeFileSync(archivePath, JSON.stringify({
     failed: result.failed,
   },
   errors: result.errors, // { id, error } objects
-}, null, 2));
+}, null, 2), { mode: 0o600 });
 console.error(`Archived to ${archivePath}`);
 
 // Abort gate: if >10% of processed+failed failed, that's a systemic problem.

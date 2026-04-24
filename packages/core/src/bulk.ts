@@ -118,6 +118,14 @@ export async function bulkInsertMemories(
   const batchSize = Math.max(1, opts.batchSize ?? 100);
   const userId = opts.userId ?? null;
 
+  // Resolve the embed shape ONCE for this entire call. Per Saboteur-2 on
+  // PR #86: calling currentEmbeddingShape() separately in the prep loop and
+  // the INSERT loop allows the env flag to flip mid-run (multi-process envs
+  // or dynamic-config reloads) — the embed text would be built under shape A
+  // but the row's embedding_shape column would record shape B, producing a
+  // shape-vector mismatch that the migration script would skip silently.
+  const shape: EmbeddingShape = currentEmbeddingShape();
+
   const results: BulkResultEntry[] = [];
   const prepared: PreparedEntry[] = [];
 
@@ -136,12 +144,11 @@ export async function bulkInsertMemories(
 
       const sourceType: SourceType = e.sourceType ?? "observed";
       const detail = e.detail ?? null;
-      // Embed text respects the currently-enabled shape (legacy by default;
-      // v1-bracketed when LODIS_CONTEXTUAL_EMBEDDINGS_ENABLED=1). PII
-      // detection runs on the raw content+detail so metadata brackets don't
-      // false-positive. See embeddings.ts W1a module comment.
+      // Embed text uses the call-level shape snapshot. PII detection runs on
+      // the raw content+detail so metadata brackets don't false-positive.
+      // See embeddings.ts W1a module comment.
       const rawText = e.content + (detail ? " " + detail : "");
-      const embeddingText = embedTextForShape(currentEmbeddingShape(), {
+      const embeddingText = embedTextForShape(shape, {
         content: e.content,
         detail,
         entity_name: e.entityName ?? null,
@@ -233,8 +240,7 @@ export async function bulkInsertMemories(
     const chunk = toInsert.slice(start, start + batchSize);
     const stmts: InStatement[] = [];
 
-    // Resolve the shape once per batch — the env flag shouldn't change mid-batch.
-    const shape: EmbeddingShape = currentEmbeddingShape();
+    // `shape` resolved once at top of bulkInsertMemories (see comment there).
     for (const p of chunk) {
       stmts.push({
         sql: `INSERT INTO memories (

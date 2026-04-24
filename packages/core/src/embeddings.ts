@@ -44,7 +44,7 @@ export function extractTags(
   if (!Array.isArray(tags)) return [];
   return tags
     .filter((t): t is string => typeof t === "string")
-    .map((t) => t.replace(/[\r\n\x1b\[\]{}]/g, "").trim())
+    .map((t) => t.replace(/[\x00-\x1f\x7f\u2028\u2029\[\]{}]/g, "").trim())
     .filter((t) => t.length > 0)
     .slice(0, 16);
 }
@@ -69,7 +69,11 @@ export interface EmbedTextInput {
  */
 export function buildEmbedText(memory: EmbedTextInput): string {
   const parts: string[] = [];
-  const sanitize = (s: string) => s.replace(/[\r\n\x1b\[\]{}]/g, "").trim();
+  // Strip: all C0 controls (\x00-\x1f), DEL (\x7f), Unicode line/paragraph
+  // separators, and brackets/braces. Per Saboteur-9 / Security-2 on PR #86:
+  // the earlier regex missed null bytes (which corrupt some tokenizers/log
+  // parsers) and control chars that can break downstream text handling.
+  const sanitize = (s: string) => s.replace(/[\x00-\x1f\x7f\u2028\u2029\[\]{}]/g, "").trim();
   if (memory.entity_name) parts.push(`[${sanitize(memory.entity_name)}]`);
   if (memory.entity_type) parts.push(`[${memory.entity_type}]`);
   if (memory.domain) parts.push(`[${memory.domain}]`);
@@ -218,12 +222,20 @@ export interface RegenerateEmbeddingsOptions {
   userId?: string | null;
   /** Skip rows already at target shape. Defaults to true. Set to false to force-regenerate. */
   skipAlreadyShape?: boolean;
-  /** Batch size per SELECT page. Default 500. Pagination uses `ORDER BY id LIMIT ... OFFSET ...`
-   *  which is stable under concurrent inserts (new row IDs go wherever they go in the hex-sorted
-   *  order, not shifting earlier pages). */
+  /** Batch size per SELECT page. Default 500. Pagination is **keyset-based**
+   *  (`WHERE id > ? ORDER BY id ASC LIMIT ?`) — stable under concurrent inserts.
+   *  Per Saboteur-4 on PR #86: OFFSET pagination was unsafe because new row IDs
+   *  (random hex) can slot in before the current offset, shifting all later
+   *  rows down by one — so the next page would skip a row. Keyset fixes this. */
   batchSize?: number;
   /** Progress callback fired after each memory is processed (success or fail). */
   onProgress?: (done: number, total: number, currentId: string, status: "ok" | "skipped" | "failed") => void;
+  /** Abort the run when a single batch's failure rate exceeds this ratio (of
+   *  non-skipped attempts). Default 0.1 (10%). Set to 1 to disable the gate.
+   *  Per Saboteur-5 on PR #86: the old post-loop gate could let a systemic
+   *  failure (embedder OOM, Modal outage, corrupted vec table) burn through
+   *  an entire corpus before exit. Per-batch gating catches it early. */
+  failureRateThreshold?: number;
 }
 
 export interface RegenerateEmbeddingsResult {
@@ -251,12 +263,25 @@ export interface RegenerateEmbeddingsResult {
  *
  * Per-row:
  *   1. Check embedding_shape; skip if already matches target (unless skipAlreadyShape=false).
+ *      NULL embedding_shape is treated as "legacy" for this check (per Saboteur-1).
  *   2. Compute text via embedTextForShape(shape, row).
  *   3. generateEmbedding(text) — hits the LRU cache if text is byte-identical.
  *   4. insertEmbedding(client, id, embedding) — upsert into vec table.
  *   5. UPDATE memories SET embedding_shape = <shape> WHERE id = <id>.
  *
  * Failures are per-row and non-fatal; aggregate counts + error list returned.
+ * If a single batch's failure rate exceeds `failureRateThreshold` (default
+ * 10%) after ≥20 attempts, the run aborts early with an `<batch-abort>`
+ * entry in `errors`. This prevents a systemic issue (embedder OOM, DB dead)
+ * from burning through the entire corpus before exit.
+ *
+ * **Does NOT write `memory_events` rows.** Migration audit is deliberately
+ * external — the caller script archives IDs + status + error messages to a
+ * mode-0600 local JSON file. Reasons: (a) re-embedding is non-semantic — no
+ * user-visible content changes; (b) at scale (~2k rows per migration) the
+ * events table would get N synchronous writes doubling the migration wall
+ * time. If in-DB audit becomes necessary, add a separate `embedding_events`
+ * table rather than polluting `memory_events` with non-content changes.
  */
 export async function regenerateEmbeddings(
   client: Client,
@@ -265,6 +290,7 @@ export async function regenerateEmbeddings(
   const batchSize = Math.max(1, opts.batchSize ?? 500);
   const skipAlreadyShape = opts.skipAlreadyShape ?? true;
   const userId = opts.userId === undefined ? null : opts.userId;
+  const failureRateThreshold = opts.failureRateThreshold ?? 0.1;
 
   // Build the WHERE clause once. Scoped by userId if supplied (or explicitly NULL
   // for local mode). If ids supplied, match those specifically.
@@ -299,26 +325,46 @@ export async function regenerateEmbeddings(
   let skipped = 0;
   let failed = 0;
   let done = 0;
+  let aborted = false;
 
-  // Paginate by (id ASC, LIMIT, OFFSET). Hex IDs are insertion-order-independent,
-  // so OFFSET is stable even under concurrent writes.
-  for (let offset = 0; ; offset += batchSize) {
+  // Keyset pagination: `WHERE id > ? ORDER BY id ASC LIMIT ?`. Stable under
+  // concurrent inserts — new rows may slot in at random hex positions, but
+  // they don't shift the cursor we hold. Per Saboteur-4 on PR #86.
+  let cursor: string | null = null;
+  while (!aborted) {
+    const pageWhere = cursor === null ? whereSql : `${whereSql} AND id > ?`;
+    const pageArgs: Array<string | null | number> = cursor === null
+      ? [...whereArgs, batchSize]
+      : [...whereArgs, cursor, batchSize];
     const page = await client.execute({
       sql: `SELECT id, content, detail, domain, entity_name, entity_type, structured_data, embedding_shape
             FROM memories
-            WHERE ${whereSql}
+            WHERE ${pageWhere}
             ORDER BY id ASC
-            LIMIT ? OFFSET ?`,
-      args: [...whereArgs, batchSize, offset],
+            LIMIT ?`,
+      args: pageArgs as Array<string | number | null>,
     });
     const rows = page.rows as unknown as Array<
       EmbedTextInput & { id: string; embedding_shape: string | null }
     >;
     if (rows.length === 0) break;
 
+    // Per-batch failure tracking for the abort gate.
+    let batchProcessed = 0;
+    let batchFailed = 0;
+
     for (const row of rows) {
       try {
-        if (skipAlreadyShape && row.embedding_shape === opts.shape) {
+        // NULL embedding_shape = legacy by convention (pre-W1a column default).
+        // Normalize for the skip comparison so a rollback to "legacy" correctly
+        // treats NULL rows as already-at-target — otherwise rollback would
+        // re-process every pre-W1a row needlessly AND overwrite the NULL
+        // sentinel (destroying the "never migrated" discriminator). Per
+        // Saboteur-1 on PR #86.
+        const effectiveRowShape: EmbeddingShape = row.embedding_shape === null || row.embedding_shape === undefined
+          ? "legacy"
+          : (row.embedding_shape as EmbeddingShape);
+        if (skipAlreadyShape && effectiveRowShape === opts.shape) {
           skipped++;
           opts.onProgress?.(++done, total, row.id, "skipped");
           continue;
@@ -331,9 +377,11 @@ export async function regenerateEmbeddings(
           args: [opts.shape, row.id],
         });
         processed++;
+        batchProcessed++;
         opts.onProgress?.(++done, total, row.id, "ok");
       } catch (err) {
         failed++;
+        batchFailed++;
         errors.push({
           id: row.id,
           error: err instanceof Error ? err.message : String(err),
@@ -342,7 +390,26 @@ export async function regenerateEmbeddings(
       }
     }
 
-    // Short-circuit: if page came back smaller than batchSize, we're done.
+    // Advance the cursor to the last row's id regardless of success — if a
+    // row fails we don't retry it in this run; it stays NULL/old-shape and
+    // gets picked up by the next invocation's skip-check.
+    cursor = rows[rows.length - 1].id;
+
+    // Per-batch failure gate. Runs AFTER the batch so per-row errors are
+    // recorded and the operator's archive file reflects actual damage, but
+    // BEFORE the next batch so we don't burn through the whole corpus on
+    // a systemic failure (embedder OOM, DB connection dead, etc.).
+    // Only gate when we have enough signal — 20 attempted rows minimum.
+    const batchAttempted = batchProcessed + batchFailed;
+    if (batchAttempted >= 20 && batchFailed / batchAttempted > failureRateThreshold) {
+      aborted = true;
+      errors.push({
+        id: `<batch-abort>`,
+        error: `Per-batch failure rate ${(batchFailed / batchAttempted * 100).toFixed(1)}% exceeded threshold ${(failureRateThreshold * 100).toFixed(1)}%. Aborting after ${done}/${total} rows processed.`,
+      });
+      break;
+    }
+
     if (rows.length < batchSize) break;
   }
 

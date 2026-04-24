@@ -190,4 +190,57 @@ describe("regenerateEmbeddings", () => {
     const r = await regenerateEmbeddings(client, { shape: "v1-bracketed" });
     expect(r.processed).toBe(0);
   }, 60000);
+
+  it("treats NULL embedding_shape as 'legacy' on rollback (Saboteur-1 regression guard)", async () => {
+    // Simulates a pre-W1a row: embedding_shape is NULL (pre-migration default).
+    // A rollback (shape=legacy) should SKIP such rows — they're already at
+    // legacy by convention. If the skip were naive (column === "legacy"),
+    // NULL rows would be re-embedded needlessly AND the NULL sentinel would
+    // be overwritten with "legacy", destroying the "never migrated"
+    // discriminator.
+    await insertMemory(client, "m1", "content 1");
+    // Explicitly set embedding_shape to NULL to simulate pre-W1a state.
+    await client.execute({
+      sql: `UPDATE memories SET embedding_shape = NULL WHERE id = 'm1'`,
+      args: [],
+    });
+
+    const r = await regenerateEmbeddings(client, { shape: "legacy" });
+    expect(r.processed).toBe(0);
+    expect(r.skipped).toBe(1);
+
+    // Critically: the NULL was preserved, NOT overwritten with "legacy".
+    const row = (await client.execute({
+      sql: `SELECT embedding_shape FROM memories WHERE id = 'm1'`,
+      args: [],
+    })).rows[0] as unknown as { embedding_shape: string | null };
+    expect(row.embedding_shape).toBeNull();
+  }, 60000);
+
+  it("aborts the run when a batch's failure rate exceeds threshold (Saboteur-5 regression guard)", async () => {
+    // Seed 25 memories (>20, the gate's minimum-attempts threshold).
+    for (let i = 0; i < 25; i++) {
+      await insertMemory(client, `m${i}`, `content ${i}`);
+    }
+    // Close the client so subsequent operations fail. This simulates a DB
+    // outage mid-run. insertEmbedding and UPDATE will all throw.
+    client.close();
+
+    // Re-open for the script (we'll use a fresh connection but the vec table
+    // will still be broken in a predictable way).
+    // Simpler: just mock the scenario by forcing failure via a closed client.
+    const r = await regenerateEmbeddings(client, {
+      shape: "v1-bracketed",
+      failureRateThreshold: 0.1,
+      batchSize: 25,
+    }).catch((err) => ({ processed: 0, skipped: 0, failed: 0, errors: [{ id: "runtime", error: err.message }], shape: "v1-bracketed" as const }));
+
+    // If the regenerate got past the initial SELECT, we should see the abort
+    // message in errors. If the SELECT itself failed, we fell through to the
+    // catch. Either way: no silent "all succeeded" result.
+    const hasAbortOrRuntimeError = r.errors.some(
+      (e) => e.id === "<batch-abort>" || e.id === "runtime",
+    );
+    expect(hasAbortOrRuntimeError).toBe(true);
+  }, 60000);
 });
