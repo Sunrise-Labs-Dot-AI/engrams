@@ -25,7 +25,29 @@ export { extractSignalTerms } from "./query-extraction.js";
 export type { QueryExtractionResult, QueryExtractionMode } from "./query-extraction.js";
 export { rerank, getReranker, DEFAULT_RERANKER_MODEL, LocalReranker, HttpReranker, selectRerankerProvider } from "./reranker.js";
 export type { RerankCandidate, RerankResult, RerankOptions, RerankerProvider } from "./reranker.js";
-export { contextSearch, computeScoreDistribution, sanitizeFollowUpTarget } from "./context-packing.js";
+export { applyPprPass, resolvePprConfig, PPR_DEFAULTS, PPR_MAX_POOL_SIZE } from "./ppr-rerank.js";
+export type { PprCandidate, PprEdge, PprResult, PprOptions, PprConfig } from "./ppr-rerank.js";
+export {
+  applyCallerSuppliedConnections,
+  applyEntityNameAutoEdges,
+  isL2EnrichmentEnabled,
+  selectSourceMemoriesForProposals,
+  generateCandidatesForMemory,
+  validateAndInsertConnectBatch,
+} from "./connections.js";
+export type {
+  ConnectionInput,
+  ConnectionsResult,
+  ConnectionDropReason,
+  DroppedConnection,
+  ProposalSourceRow,
+  ProposalCandidateRow,
+  SelectSourcesOptions,
+  GenerateCandidatesOptions,
+  ConnectBatchInput,
+  ConnectBatchResult,
+} from "./connections.js";
+export { contextSearch, computeScoreDistribution, sanitizeFollowUpTarget, fetchPprEdges } from "./context-packing.js";
 export type { ContextPackedResult, HierarchicalResult, NarrativeResult, ContextMemory, ContextSummary, ContextReference, EntityProfileSummary, Saturation, ScoreDistribution, Coverage, SuggestedFollowUp, ContextMeta } from "./context-packing.js";
 export { rateContext } from "./feedback.js";
 export type { RateContextResult, RateContextStatus } from "./feedback.js";

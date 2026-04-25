@@ -416,6 +416,39 @@ async function runMigrations(client: Client): Promise<void> {
         ON memories(embedding_shape) WHERE deleted_at IS NULL;
     `);
   });
+
+  await runMigration(client, "wave2_5_connection_indexes", async () => {
+    // Wave 2.5 — connection infrastructure prerequisites.
+    //
+    // (1) Unique edge index: prerequisite for INSERT OR IGNORE in L1, L2a, L3,
+    //     L4. Without this, every L4 re-run would double the table (Security F2
+    //     in plan-review round 2). The triple uniquely identifies an edge —
+    //     two memories CAN have multiple edges as long as they have different
+    //     relationships (e.g. `works_at` AND `references` between the same
+    //     pair is legal; two `works_at` is not).
+    //
+    // (2) COLLATE NOCASE entity_name index: L1 (caller-supplied targetEntityName
+    //     resolution) and L2a (auto-edge by entity_name match) both query
+    //     `WHERE entity_name = ? COLLATE NOCASE`. The pre-existing
+    //     idx_memories_entity_name (line 143) is case-sensitive and won't be
+    //     used by the planner for COLLATE NOCASE comparisons. Saboteur F2 in
+    //     plan-review round 2: without this, L2a degrades to a full scan on
+    //     the hottest write path on Turso multi-tenant DBs at 100K+ rows.
+    //
+    // Both are CREATE ... IF NOT EXISTS — safe re-run. Rollback: DROP INDEX
+    // (universally supported, no Turso libSQL version dependency).
+    await client.execute({
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_connections_unique
+              ON memory_connections(source_memory_id, target_memory_id, relationship)`,
+      args: [],
+    });
+    await client.execute({
+      sql: `CREATE INDEX IF NOT EXISTS idx_memories_entity_name_nocase
+              ON memories(entity_name COLLATE NOCASE)
+              WHERE deleted_at IS NULL AND entity_name IS NOT NULL`,
+      args: [],
+    });
+  });
 }
 
 export async function createDatabase(config?: {
