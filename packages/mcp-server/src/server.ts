@@ -1014,13 +1014,26 @@ Organize memories by life domain: general, work, health, finance, relationships,
       const failed = merged.filter((r) => r.status === "failed").length;
       const skipped = merged.filter((r) => r.status === "skipped").length;
 
-      return textResult({
+      const result: Record<string, unknown> = {
         written,
         failed,
         skipped,
         results: merged,
         durationMs: coreResult.durationMs,
-      });
+      };
+      // Discoverability hint per Nh-F4 in code-review round 2: bulk_upload
+      // intentionally skips L2a (Vercel setImmediate would silently drop), so
+      // imported memories land disconnected. Surface this in the response so
+      // operators see the L4 backfill path without having to read CLAUDE.md.
+      // Threshold: 100+ writes — small batches don't warrant the noise.
+      if (written >= 100) {
+        result.connections_hint =
+          "L2a entity-name auto-edges are NOT applied to bulk_upload (would silently drop on serverless). " +
+          "To populate memory_connections for the imported rows, run: " +
+          "ANTHROPIC_API_KEY=... node scripts/wave-2.5-backfill-connections.mjs " +
+          "(idempotent, resumable, ~$7.50 / 30 min for 10K memories).";
+      }
+      return textResult(result);
     },
   );
 
@@ -2577,7 +2590,12 @@ need attention — schedule another run sooner than your normal cadence.`,
       const limit = params.limit ?? 50;
       // Boolean backpressure signal — name + type now match (was a misnamed
       // string sentinel: Nh-C2 in code-review round 1).
-      const queueSaturated = sources.length >= limit;
+      // Computed on POST-permission-filter set (allowedSources), not raw
+      // sources (Nh-F3 in code-review round 2): if all 50 sources were
+      // permission-restricted, raw `sources.length >= limit` would be true
+      // and the documented "schedule sooner" pseudo-code would busy-loop
+      // forever fetching the same restricted memories.
+      const queueSaturated = allowedSources.length >= limit;
       return textResult({
         proposals,
         meta: {

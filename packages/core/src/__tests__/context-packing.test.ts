@@ -365,7 +365,7 @@ describe("contextSearch PPR pass telemetry (W2)", () => {
     expect(res.meta.pprPass).toBeUndefined();
   });
 
-  it("emits pprPass with engaged=false + ppr_graph_error when PPR opted-in but reranker fell back", async () => {
+  it("emits pprPass with engaged=false + ppr_reranker_disengaged when PPR opted-in but reranker fell back", async () => {
     // Reranker disabled → rerankerEngaged === false → PPR cannot run on RRF
     // scores (meaningless). pprPass surfaces engaged=false with structural
     // reason rather than being absent — distinguishes this from "PPR not
@@ -375,6 +375,6 @@ describe("contextSearch PPR pass telemetry (W2)", () => {
     const res = await contextSearch(client, "anything");
     expect(res.meta.pprPass).toBeDefined();
     expect(res.meta.pprPass?.engaged).toBe(false);
-    expect(res.meta.pprPass?.pprError).toBe("ppr_graph_error");
+    expect(res.meta.pprPass?.pprError).toBe("ppr_reranker_disengaged");
   });
 });

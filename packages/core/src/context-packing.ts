@@ -148,7 +148,8 @@ export interface ContextMeta {
     candidatePoolSize: number;
     edgeCount: number;
     /** Fixed-token vocabulary (Security F6 in plan-review): never raw exception
-     *  text. One of: "ppr_timeout" | "ppr_graph_error" | "ppr_nan_guard" | "ppr_unknown". */
+     *  text. One of: "ppr_timeout" | "ppr_graph_error" | "ppr_nan_guard" |
+     *  "ppr_reranker_disengaged" | "ppr_unknown". */
     pprError?: string;
   };
 }
@@ -838,16 +839,25 @@ export async function contextSearch(
       if (reranked.length > rerankTopK) reranked = reranked.slice(0, rerankTopK);
     }
   } else if (pprConfig.enabled) {
-    // PPR was opted-in but couldn't run (no candidates / reranker fell back).
-    // Surface engaged=false with a structural reason so dashboards see this
-    // distinct from "PPR not opted in" (where pprPass is undefined entirely).
+    // PPR was opted-in but couldn't run. Distinguish the two structural
+    // reasons (Sb-F17 in code-review round 2: previous fabrication labeled
+    // both as "ppr_graph_error" — operators saw misleading "graph error" in
+    // dashboards when the actual cause was reranker fallback to RRF).
+    let pprError: string;
+    if (rerankerEngaged !== true) {
+      pprError = "ppr_reranker_disengaged"; // PPR over RRF scores is meaningless
+    } else if (reranked.length === 0) {
+      pprError = "ppr_graph_error";  // empty candidate pool
+    } else {
+      pprError = "ppr_unknown";
+    }
     pprPass = {
       engaged: false,
       iterations: 0,
       converged: false,
       candidatePoolSize: reranked.length,
       edgeCount: 0,
-      pprError: rerankerEngaged === true ? "ppr_unknown" : "ppr_graph_error",
+      pprError,
     };
     // Same trim defensive — when PPR is opted-in, the rerank request asked for
     // the full pool; we still need to trim before downstream packing.

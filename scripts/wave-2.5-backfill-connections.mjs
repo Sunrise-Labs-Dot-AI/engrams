@@ -243,13 +243,30 @@ async function classifyConnections(source, candidates) {
 //     rows are all PII, fresh=[] → loop exits before non-PII ever processed.
 //   (Perf-W8) Over-fetch degradation: as processedSet grows, the fixed 4×
 //     over-fetch ratio yields fewer fresh rows per call → premature exit.
-// Server-side filter eliminates both.
+//
+// Code-review round 2 (Sb-F13/Nh-F6/Perf-F4): the SQL excludeIds is HARD-
+// CAPPED at EXCLUDE_IDS_MAX (=500) inside selectSourceMemoriesForProposals to
+// stay under SQLITE_MAX_VARIABLE_NUMBER (default 999, Turso 32766). Once the
+// state file's processedSet grows past 500, the SQL filter only sees the most
+// recent slice — over-fetched older rows that ARE in processedSet must be
+// re-filtered client-side here. The over-fetch ratio (BATCH_SIZE * 2) bounds
+// the cost; in steady state most over-fetched rows are NOT in processedSet
+// because the SQL ORDER BY learned_at ASC produces fresh-oldest-first.
 async function selectFiltered(client, userId, opts) {
-  return selectSourceMemoriesForProposals(client, userId, {
+  const overFetch = (opts.limit ?? BATCH_SIZE) * 2;
+  const sources = await selectSourceMemoriesForProposals(client, userId, {
     ...opts,
+    limit: overFetch,
     excludePii: !INCLUDE_PII,
+    // Sliced by selectSourceMemoriesForProposals to EXCLUDE_IDS_MAX. Pass the
+    // most-recently-stamped IDs so the SQL filter excludes the rows most
+    // likely to be re-fetched (oldest stamps first since order is FIFO drain).
     excludeIds: [...processedSet],
   });
+  // Belt-and-suspenders: re-filter against the full processedSet to catch
+  // any rows that escaped the SQL-side cap.
+  const fresh = sources.filter((s) => !processedSet.has(s.id));
+  return fresh.slice(0, opts.limit ?? BATCH_SIZE);
 }
 
 // ---------- Main loop ----------

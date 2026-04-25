@@ -289,9 +289,13 @@ export function isL2EnrichmentEnabled(env: NodeJS.ProcessEnv = process.env): boo
  * (case-insensitive, user-scoped). Bounded to prevent runaway on common names
  * ("James", "Anthropic").
  *
- * Performance (Perf-W2 in code-review round 1): batched. One SELECT for
- * matches + one multi-value INSERT. Total round-trips: 1-2 (was 1 + up to 10
- * before this fix). Safe to await on the write critical path.
+ * **Invocation pattern: AWAIT THIS SYNCHRONOUSLY on the write path.** Do NOT
+ * wrap in `setImmediate`. On Vercel/serverless, `setImmediate` callbacks
+ * registered after the response is sent are silently dropped when the lambda
+ * freezes — every L2a edge is lost. The previous fire-and-forget design was
+ * removed in code-review round 1 (Sb-C3 + Perf-C3) for exactly this reason.
+ * After the multi-value INSERT optimization (Perf-W2), the cost is 1-2 SQL
+ * round-trips per write (~16ms on Turso) — acceptable on the write path.
  *
  * Failure semantics: never throws. On any error, logs to stderr and returns
  * `{ applied: 0 }`. Callers that need to observe failures should not use this
@@ -382,10 +386,22 @@ export interface SelectSourcesOptions {
    *  PII — non-PII rows past the LIMIT are never reached). */
   excludePii?: boolean;
   /** Skip memories whose id is in this set (used by L4 to honor the resume
-   *  state file at the SQL layer instead of over-fetch + JS filter). Up to a
-   *  few hundred IDs is fine; larger sets should use a cursor instead. */
+   *  state file at the SQL layer instead of over-fetch + JS filter). Hard-
+   *  capped at EXCLUDE_IDS_MAX (500) to stay well under SQLite's
+   *  SQLITE_MAX_VARIABLE_NUMBER (default 999, libSQL/Turso 32766). Code-review
+   *  round 2 (Sb-F13/Nh-F6/Perf-F4): callers passing larger sets get only the
+   *  first EXCLUDE_IDS_MAX entries SQL-filtered; remaining IDs must be
+   *  filtered client-side by the caller (or the caller should switch to a
+   *  learned_at cursor). The L4 backfill script's resume mechanism is safe
+   *  because it stamps every processed ID before the API call — over-fetched
+   *  rows that aren't in the truncated SQL exclude list are silently re-fetched
+   *  but skipped by the in-memory `processedSet`. */
   excludeIds?: string[];
 }
+
+/** Maximum number of excludeIds the SQL layer will accept. Beyond this, the
+ *  caller is expected to filter client-side or use a cursor. */
+export const EXCLUDE_IDS_MAX = 500;
 
 /**
  * L3: select source memories that need connection-creation attention.
@@ -416,7 +432,15 @@ export async function selectSourceMemoriesForProposals(
   const minAgeHours = Math.max(0, options.minAgeHours ?? 6);
   const includeAlreadyConnected = options.includeAlreadyConnected ?? false;
   const excludePii = options.excludePii ?? false;
-  const excludeIds = options.excludeIds ?? [];
+  // Hard cap excludeIds at EXCLUDE_IDS_MAX to stay well under
+  // SQLITE_MAX_VARIABLE_NUMBER (Sb-F13/Nh-F6/Perf-F4 in code-review round 2:
+  // an unbounded NOT IN clause crashes once processedSet exceeds the engine's
+  // parameter cap, ~32K on Turso). Callers are expected to filter the rest
+  // client-side. The L4 script does so via its in-memory processedSet check.
+  const rawExclude = options.excludeIds ?? [];
+  const excludeIds = rawExclude.length > EXCLUDE_IDS_MAX
+    ? rawExclude.slice(0, EXCLUDE_IDS_MAX)
+    : rawExclude;
 
   // Compare via julianday() to avoid format mismatch — `learned_at` is
   // typically ISO 8601 ("2026-04-25T10:23:52.123Z") while `datetime('now', ...)`
