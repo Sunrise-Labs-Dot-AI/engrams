@@ -1,8 +1,12 @@
-import { describe, it, expect, vi } from "vitest";
-import type { Client } from "@libsql/client";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { existsSync, unlinkSync } from "fs";
+import { resolve } from "path";
+import { tmpdir } from "os";
+import { randomBytes } from "crypto";
+import { createClient, type Client } from "@libsql/client";
 import { ensureUniqueConnectionIndex } from "../db.js";
 
-describe("ensureUniqueConnectionIndex", () => {
+describe("ensureUniqueConnectionIndex — branch selection (mocked)", () => {
   it("uses client.batch with mode 'write' on remote URLs", async () => {
     const batch = vi.fn().mockResolvedValue([]);
     const executeMultiple = vi.fn();
@@ -39,5 +43,98 @@ describe("ensureUniqueConnectionIndex", () => {
     expect(sql).toMatch(/DELETE FROM memory_connections/);
     expect(sql).toMatch(/CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_connections_unique/);
     expect(sql).toMatch(/COMMIT/);
+  });
+
+  it("throws when isRemote=true but client.batch is missing", async () => {
+    const executeMultiple = vi.fn();
+    const client = { executeMultiple } as unknown as Client;
+
+    await expect(ensureUniqueConnectionIndex(client, true)).rejects.toThrow(
+      /client\.batch is missing/,
+    );
+    expect(executeMultiple).not.toHaveBeenCalled();
+  });
+});
+
+describe("ensureUniqueConnectionIndex — local SQLite end-to-end", () => {
+  const dbPaths: string[] = [];
+
+  afterEach(() => {
+    for (const p of dbPaths) {
+      try {
+        if (existsSync(p)) unlinkSync(p);
+        if (existsSync(p + "-wal")) unlinkSync(p + "-wal");
+        if (existsSync(p + "-shm")) unlinkSync(p + "-shm");
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    dbPaths.length = 0;
+  });
+
+  async function freshClient(): Promise<Client> {
+    const path = resolve(tmpdir(), `lodis-eu-${randomBytes(8).toString("hex")}.db`);
+    dbPaths.push(path);
+    const client = createClient({ url: "file:" + path });
+    await client.executeMultiple(`
+      CREATE TABLE memory_connections (
+        source_memory_id TEXT NOT NULL,
+        target_memory_id TEXT NOT NULL,
+        relationship TEXT NOT NULL
+      );
+    `);
+    return client;
+  }
+
+  it("dedupes pre-existing duplicates and creates the unique index", async () => {
+    const client = await freshClient();
+
+    await client.executeMultiple(`
+      INSERT INTO memory_connections (source_memory_id, target_memory_id, relationship) VALUES
+        ('a', 'b', 'related'),
+        ('a', 'b', 'related'),
+        ('a', 'b', 'related'),
+        ('a', 'b', 'works_at'),
+        ('c', 'd', 'related');
+    `);
+
+    await ensureUniqueConnectionIndex(client, false);
+
+    const rows = await client.execute({
+      sql: `SELECT source_memory_id, target_memory_id, relationship FROM memory_connections
+              ORDER BY source_memory_id, target_memory_id, relationship`,
+      args: [],
+    });
+    expect(rows.rows.length).toBe(3);
+
+    const idx = await client.execute({
+      sql: `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_connections_unique'`,
+      args: [],
+    });
+    expect(idx.rows.length).toBe(1);
+
+    await expect(
+      client.execute({
+        sql: `INSERT INTO memory_connections (source_memory_id, target_memory_id, relationship) VALUES ('a', 'b', 'related')`,
+        args: [],
+      }),
+    ).rejects.toThrow(/UNIQUE constraint/);
+
+    await client.execute({
+      sql: `INSERT INTO memory_connections (source_memory_id, target_memory_id, relationship) VALUES ('a', 'b', 'references')`,
+      args: [],
+    });
+  });
+
+  it("is idempotent — second call on a clean DB is a no-op", async () => {
+    const client = await freshClient();
+    await ensureUniqueConnectionIndex(client, false);
+    await ensureUniqueConnectionIndex(client, false);
+
+    const idx = await client.execute({
+      sql: `SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_connections_unique'`,
+      args: [],
+    });
+    expect(idx.rows.length).toBe(1);
   });
 });
