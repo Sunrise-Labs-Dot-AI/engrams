@@ -532,33 +532,63 @@ async function runMigrations(client: Client): Promise<void> {
     // new composite has the same leading-column shape and SQLite consistently
     // picks the new one (verified below). Keeping both wastes write amp.
     //
+    // Wrapped in BEGIN IMMEDIATE / COMMIT to match the wave2_5_connection_indexes
+    // atomicity pattern (lines 460-470). Critical: the runMigration wrapper at
+    // line 121 silently swallows errors AND marks the migration done in
+    // _migrations regardless. Without the transaction, a partial failure
+    // (CREATE #2 fails mid-migration) would leave us with: composite #1 created,
+    // composite #2 missing, old index still present (DROP never reached). The
+    // migration would be marked done, so re-running is a no-op. Recovery would
+    // require manual `DELETE FROM _migrations` + restart. With the transaction,
+    // any failure rolls back all three statements and the verification block
+    // below catches the inconsistency on the same run.
+    //
     // Rollback: DROP INDEX idx_memories_entity_name_nocase_updated;
     //           DROP INDEX idx_memories_domain_updated;
     //           CREATE INDEX idx_memories_entity_name_nocase
     //             ON memories(entity_name COLLATE NOCASE)
     //             WHERE deleted_at IS NULL AND entity_name IS NOT NULL;
     //           DELETE FROM _migrations WHERE name = 'wave2_5_covering_indexes';
-    await client.execute({
-      sql: `CREATE INDEX IF NOT EXISTS idx_memories_entity_name_nocase_updated
-              ON memories(entity_name COLLATE NOCASE, updated_at DESC)
-              WHERE deleted_at IS NULL AND entity_name IS NOT NULL`,
+    await client.executeMultiple(`
+      BEGIN IMMEDIATE;
+      CREATE INDEX IF NOT EXISTS idx_memories_entity_name_nocase_updated
+        ON memories(entity_name COLLATE NOCASE, updated_at DESC)
+        WHERE deleted_at IS NULL AND entity_name IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_memories_domain_updated
+        ON memories(domain, updated_at DESC)
+        WHERE deleted_at IS NULL AND entity_type IS NOT 'snippet';
+      DROP INDEX IF EXISTS idx_memories_entity_name_nocase;
+      COMMIT;
+    `);
+
+    // Verification: confirm both new indexes exist AND the old one is gone.
+    // Same rationale as wave2_5_connection_indexes verification (lines 488-499):
+    // the runMigration wrapper marks the migration done unconditionally, so a
+    // throw here doesn't trigger automatic retry — but a loud stderr warning
+    // gives operators an actionable signal. Manual recovery: DELETE FROM
+    // _migrations WHERE name = 'wave2_5_covering_indexes' and restart.
+    const verify = await client.execute({
+      sql: `SELECT name FROM sqlite_master
+             WHERE type = 'index'
+               AND name IN (
+                 'idx_memories_entity_name_nocase_updated',
+                 'idx_memories_domain_updated',
+                 'idx_memories_entity_name_nocase'
+               )`,
       args: [],
     });
-    await client.execute({
-      sql: `CREATE INDEX IF NOT EXISTS idx_memories_domain_updated
-              ON memories(domain, updated_at DESC)
-              WHERE deleted_at IS NULL AND entity_type IS NOT 'snippet'`,
-      args: [],
-    });
-    // Drop the now-redundant single-column entity_name index. The new composite
-    // has `entity_name COLLATE NOCASE` as its leading column with a strict-
-    // superset partial predicate (same WHERE clause), so any query that used
-    // the old index can use the new one. Verified via EXPLAIN QUERY PLAN
-    // against L2a + L3 entity_name lookups — planner picks the composite.
-    await client.execute({
-      sql: `DROP INDEX IF EXISTS idx_memories_entity_name_nocase`,
-      args: [],
-    });
+    const presentIndexes = new Set(verify.rows.map((r) => r.name as string));
+    const newCompositeOk = presentIndexes.has("idx_memories_entity_name_nocase_updated");
+    const newDomainOk = presentIndexes.has("idx_memories_domain_updated");
+    const oldDropped = !presentIndexes.has("idx_memories_entity_name_nocase");
+    if (!newCompositeOk || !newDomainOk || !oldDropped) {
+      process.stderr.write(
+        "[lodis] CRITICAL: wave2_5_covering_indexes inconsistent state after migration — " +
+        `entity_name composite=${newCompositeOk}, domain composite=${newDomainOk}, old index dropped=${oldDropped}. ` +
+        "L2a + L3 hot-path queries will silently regress to filesorts (or worse, full scans). " +
+        "Recovery: DELETE FROM _migrations WHERE name = 'wave2_5_covering_indexes' and restart.\n",
+      );
+    }
   });
 }
 
