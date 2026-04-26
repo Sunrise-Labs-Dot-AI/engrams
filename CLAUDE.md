@@ -113,7 +113,32 @@ Memories are classified into 14 entity types: `person`, `organization`, `place`,
 - `entity_name` — canonical name for dedup (e.g., "Sarah Chen")
 - `structured_data` — JSON with type-specific fields (role, org, category, etc.)
 
-Entity extraction runs in the background via LLM on every `memory_write` (fire-and-forget). Auto-creates connections between entities (works_at, involves, located_at, part_of, about, informed_by, uses).
+Entity classification (`entity_type`, `entity_name`) is caller-supplied at `memory_write` time. The server does not run an LLM to infer these — agents that don't supply them get a `classify_hint` in the response and can later set them via `memory_update`.
+
+## Connection creation
+
+`memory_connections` rows are created via four layered mechanisms (Wave 2.5; replaces the earlier never-implemented "fire-and-forget LLM extraction" plan):
+
+1. **Caller-supplied at write time (L1)**: `memory_write` and `memory_bulk_upload` accept an optional `connections[]` array. Calling agents (which already have relevant memories loaded in their context) populate this with `(targetEntityName OR targetMemoryId, relationship)` tuples. Resolved + inserted synchronously; results returned in `connections_result.applied` / `dropped`.
+
+2. **Server deterministic at write time (L2a)**: when a new memory has `entity_name` set, the server creates `related` edges to up to 10 existing memories with the same entity_name (case-insensitive, user-scoped). Awaited synchronously on the write path (~16ms added latency on Turso). Do NOT use `setImmediate` — on Vercel/serverless the lambda freezes after the response is sent and queued tasks are silently dropped. L2a is intentionally NOT applied by `memory_bulk_upload` — operators run the L4 backfill script after large imports. Opt-out via `LODIS_L2_ENRICHMENT_DISABLED=1`.
+
+3. **Scheduled task (L3)**: users set up a recurring task that pulls proposals via `memory_propose_connections` (LLM-free server selection — picks zero-edge memories ≥6h old, excludes snippets, attaches entity-name and same-domain candidates with permission filtering), classifies them with the caller's already-loaded LLM context, then commits via `memory_connect_batch` (per-edge user_id ownership check on both endpoints). No server-side LLM dependency. Example loop:
+   ```
+   const { proposals, meta } = await memory_propose_connections({ agentId: self.id, limit: 50 });
+   const edges = [];
+   for (const { source, candidates } of proposals) {
+     for (const c of LLM.classify(source, candidates)) {  // LLM picks real edges + relationship
+       edges.push({ source_memory_id: source.id, target_memory_id: c.id, relationship: c.relationship });
+     }
+   }
+   if (edges.length > 0) await memory_connect_batch({ agentId: self.id, connections: edges });
+   if (meta.queue_saturated) scheduleAnotherRunSooner();  // backpressure
+   ```
+
+4. **One-off backfill (L4)**: operator-run script `scripts/wave-2.5-backfill-connections.mjs` uses an operator-supplied `ANTHROPIC_API_KEY` to drain existing disconnected memories. Run once per major data import; not a runtime feature. Resumable via `~/.lodis-mrcr-run/wave-2.5-processed-ids.json` state file. PII-flagged rows excluded by default.
+
+**Lodis itself never makes an LLM call from a write or read path.** All extraction work happens on the caller side or in operator-run scripts.
 
 ## Snippet (progress events)
 

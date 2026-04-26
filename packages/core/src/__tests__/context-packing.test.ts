@@ -306,3 +306,75 @@ describe("resolveRerankTopK (W1c)", () => {
     expect(resolveRerankTopK()).toBe(60);
   });
 });
+
+describe("contextSearch PPR pass telemetry (W2)", () => {
+  let dbPath: string;
+  let client: Client;
+  const originals: Record<string, string | undefined> = {};
+
+  const captureEnv = (keys: string[]) => {
+    for (const k of keys) originals[k] = process.env[k];
+  };
+  const restoreEnv = () => {
+    for (const [k, v] of Object.entries(originals)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  };
+
+  beforeEach(async () => {
+    dbPath = resolve(tmpdir(), `lodis-ctx-ppr-${randomBytes(8).toString("hex")}.db`);
+    const result = await createDatabase({ url: "file:" + dbPath });
+    client = result.client;
+    captureEnv([
+      "LODIS_PPR_RERANK_DISABLED",
+      "LODIS_PPR_RERANK_ENABLED",
+      "LODIS_RERANKER_DISABLED",
+      "LODIS_RERANKER_ENABLED",
+    ]);
+    delete process.env.LODIS_PPR_RERANK_DISABLED;
+    delete process.env.LODIS_PPR_RERANK_ENABLED;
+    // Reranker off by default — empty DB short-circuits before any model load.
+    process.env.LODIS_RERANKER_DISABLED = "1";
+  });
+
+  afterEach(() => {
+    restoreEnv();
+    try {
+      client.close();
+      if (existsSync(dbPath)) unlinkSync(dbPath);
+      if (existsSync(dbPath + "-wal")) unlinkSync(dbPath + "-wal");
+      if (existsSync(dbPath + "-shm")) unlinkSync(dbPath + "-shm");
+    } catch {
+      // cleanup best-effort
+    }
+  });
+
+  it("omits pprPass when PPR is not opted in (default off)", async () => {
+    // Per Saboteur F9 telemetry contract: pprPass MUST be undefined when PPR
+    // is disabled, so dashboards can distinguish "not deployed" from
+    // "deployed but failed".
+    const res = await contextSearch(client, "anything");
+    expect(res.meta.pprPass).toBeUndefined();
+  });
+
+  it("omits pprPass when LODIS_PPR_RERANK_DISABLED=1 (kill switch)", async () => {
+    process.env.LODIS_PPR_RERANK_ENABLED = "1";
+    process.env.LODIS_PPR_RERANK_DISABLED = "1";
+    const res = await contextSearch(client, "anything");
+    expect(res.meta.pprPass).toBeUndefined();
+  });
+
+  it("emits pprPass with engaged=false + ppr_reranker_disengaged when PPR opted-in but reranker fell back", async () => {
+    // Reranker disabled → rerankerEngaged === false → PPR cannot run on RRF
+    // scores (meaningless). pprPass surfaces engaged=false with structural
+    // reason rather than being absent — distinguishes this from "PPR not
+    // deployed at all".
+    process.env.LODIS_PPR_RERANK_ENABLED = "1";
+    process.env.LODIS_RERANKER_DISABLED = "1";
+    const res = await contextSearch(client, "anything");
+    expect(res.meta.pprPass).toBeDefined();
+    expect(res.meta.pprPass?.engaged).toBe(false);
+    expect(res.meta.pprPass?.pprError).toBe("ppr_reranker_disengaged");
+  });
+});

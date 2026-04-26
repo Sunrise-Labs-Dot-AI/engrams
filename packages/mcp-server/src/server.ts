@@ -56,8 +56,25 @@ import {
   getDomain,
   listDomains,
   evaluateAutoPin,
+  applyCallerSuppliedConnections,
+  applyEntityNameAutoEdges,
+  selectSourceMemoriesForProposals,
+  generateCandidatesForMemory,
+  validateAndInsertConnectBatch,
 } from "@lodis/core";
-import type { SourceType, Relationship, EntityType, Permanence, Client, BulkEntry, ChapterFormat, PinAction } from "@lodis/core";
+import type {
+  SourceType, Relationship, EntityType, Permanence, Client, BulkEntry, ChapterFormat, PinAction,
+  ConnectionInput, ConnectionsResult, ConnectBatchInput, ConnectBatchResult,
+} from "@lodis/core";
+
+// Wave 2.5: list of valid Relationship values for Zod enum schemas. Mirrors
+// the `Relationship` type union in @lodis/core/types.ts. Kept in sync manually;
+// adding a relationship requires updating both this list and the type.
+const RELATIONSHIP_VALUES = [
+  "influences", "supports", "contradicts", "related", "learned-together",
+  "works_at", "involves", "located_at", "part_of", "about", "informed_by",
+  "uses", "references",
+] as const;
 
 function generateId(): string {
   return randomBytes(16).toString("hex");
@@ -333,6 +350,19 @@ Organize memories by life domain: general, work, health, finance, relationships,
       force: z.boolean().optional().describe("Deprecated — use resolution: 'keep_both' instead"),
       resolution: z.enum(["update", "correct", "add_detail", "keep_both", "skip"]).optional().describe("How to resolve a similarity match"),
       existingMemoryId: z.string().optional().describe("ID of existing memory to act on (required for update/correct/add_detail)"),
+      // Wave 2.5 L1: caller-supplied connections (typically populated from
+      // memories the calling agent already has loaded in context, e.g. from a
+      // recent memory_context or memory_search call). Resolved + inserted
+      // synchronously; results returned in connections_result.applied/dropped.
+      // No LLM is involved server-side — the agent does the inference.
+      // Cap at 50 per write (Sec-N4 in code-review round 1: unbounded would
+      // be a DoS surface — even with the batched implementation, very large
+      // lists are pathological). 50 matches the default L3 candidate-limit.
+      connections: z.array(z.object({
+        targetMemoryId: z.string().optional().describe("ID of the related memory (preferred over targetEntityName)"),
+        targetEntityName: z.string().optional().describe("Entity name to resolve (case-insensitive, user-scoped)"),
+        relationship: z.enum(RELATIONSHIP_VALUES).describe("Relationship type"),
+      })).max(50).optional().describe("Optional list of up to 50 connections to typed neighbors. Best populated from memories already loaded in the caller's context."),
     },
     async (params, extra) => {
       const userId = getUserId(extra as Record<string, unknown>);
@@ -812,6 +842,50 @@ Organize memories by life domain: general, work, health, finance, relationships,
 
       await bumpLastModified(client);
 
+      // Wave 2.5 L1: caller-supplied connections (sync). Filter by write
+      // permission on source domain BEFORE calling the helper — the helper
+      // doesn't know about agent_permissions (kept LLM-pure / permission-pure).
+      // The source memory we just wrote belongs to the calling agent's domain;
+      // it has write permission on it by definition (the write succeeded).
+      // No additional checkPermission call needed for L1 on source.
+      let connectionsResult: ConnectionsResult | undefined;
+      if (params.connections && params.connections.length > 0) {
+        try {
+          connectionsResult = await applyCallerSuppliedConnections(
+            client,
+            id,
+            params.connections as ConnectionInput[],
+            userId ?? null,
+          );
+        } catch (err) {
+          // L1 is sync but its failure must not block the write itself —
+          // the row already persisted. Sb-W6 in code-review round 1: previously
+          // labelled all dropped entries as "not_found" which misled agents
+          // into creating duplicate "missing" entities. Use transient_error
+          // so the caller knows to retry rather than re-create the target.
+          process.stderr.write(`[lodis] L1 connections failed for ${id}: ${(err as Error)?.message ?? String(err)}\n`);
+          connectionsResult = {
+            applied: 0,
+            dropped: (params.connections as ConnectionInput[]).map((c) => ({
+              ...c,
+              reason: "transient_error" as const,
+            })),
+          };
+        }
+      }
+
+      // Wave 2.5 L2a: server-deterministic auto-edge by entity_name. Awaited
+      // synchronously now (Sb-C3 + Perf-C3 in code-review round 1: setImmediate
+      // is silently dropped on Vercel when the lambda freezes, causing zero
+      // L2a edges to land in production). After the multi-value INSERT
+      // optimization in applyEntityNameAutoEdges (Perf-W2), this is 1-2 round
+      // trips total — adds ~16ms on Turso, acceptable on the write path.
+      // Opt-out via LODIS_L2_ENRICHMENT_DISABLED=1 (handled inside helper).
+      // Helper never throws — failures log to stderr and return {applied: 0}.
+      if (params.entityName) {
+        await applyEntityNameAutoEdges(client, id, params.entityName, userId ?? null);
+      }
+
       // Check if onboarding hint should be added for near-empty databases
       const totalAfterWrite = ((await client.execute({
         sql: `SELECT COUNT(*) as count FROM memories WHERE deleted_at IS NULL${userId ? ' AND user_id = ?' : ''}`,
@@ -827,6 +901,9 @@ Organize memories by life domain: general, work, health, finance, relationships,
         entityType: params.entityType ?? null,
         entityName: params.entityName ?? null,
       };
+      if (connectionsResult) {
+        result.connections_result = connectionsResult;
+      }
       if (totalAfterWrite <= 3) {
         result.onboarding_hint = "Memory saved! Your database is just getting started. Call memory_onboard to run a guided setup — it will configure your agent to use Lodis by default and seed your memory with context from connected tools.";
       }
@@ -917,18 +994,46 @@ Organize memories by life domain: general, work, health, finance, relationships,
         ...(r.id ? { url: memoryUrl(r.id) } : {}),
       }));
 
+      // Wave 2.5: L2a INTENTIONALLY NOT applied to bulk_upload (Sb-C3 + Perf-C3
+      // in code-review round 1: setImmediate at this scale silently drops on
+      // Vercel — 5K queued tasks die with the lambda. Awaiting them all
+      // serially would add minutes of latency to the response.)
+      //
+      // Bulk imports are by definition canonical-source dumps without per-entry
+      // curation; running L2a per-row could also create 10x edge explosions
+      // when a CSV import shares an entity_name across many rows.
+      //
+      // Operators should run scripts/wave-2.5-backfill-connections.mjs after a
+      // large bulk_upload to populate connections via the L4 path (LLM
+      // classification, idempotent, resumable). The L4 path also handles the
+      // long-tail entity-relationship inference that L2a's deterministic
+      // entity-name match wouldn't catch.
+
       const merged = [...permFailures, ...remapped].sort((a, b) => a.index - b.index);
       const written = merged.filter((r) => r.status === "written").length;
       const failed = merged.filter((r) => r.status === "failed").length;
       const skipped = merged.filter((r) => r.status === "skipped").length;
 
-      return textResult({
+      const result: Record<string, unknown> = {
         written,
         failed,
         skipped,
         results: merged,
         durationMs: coreResult.durationMs,
-      });
+      };
+      // Discoverability hint per Nh-F4 in code-review round 2: bulk_upload
+      // intentionally skips L2a (Vercel setImmediate would silently drop), so
+      // imported memories land disconnected. Surface this in the response so
+      // operators see the L4 backfill path without having to read CLAUDE.md.
+      // Threshold: 100+ writes — small batches don't warrant the noise.
+      if (written >= 100) {
+        result.connections_hint =
+          "L2a entity-name auto-edges are NOT applied to bulk_upload (would silently drop on serverless). " +
+          "To populate memory_connections for the imported rows, run: " +
+          "ANTHROPIC_API_KEY=... node scripts/wave-2.5-backfill-connections.mjs " +
+          "(idempotent, resumable, ~$7.50 / 30 min for 10K memories).";
+      }
+      return textResult(result);
     },
   );
 
@@ -2386,6 +2491,198 @@ Organize memories by life domain: general, work, health, finance, relationships,
         targetMemoryId: params.targetMemoryId,
         relationship: params.relationship,
       });
+    },
+  );
+
+  // Wave 2.5 L3: surface candidate connections an LLM-equipped caller should
+  // classify. Server side is LLM-free — the caller's agent does the inference
+  // using context it already has loaded. Pair with memory_connect_batch to
+  // commit the classified edges. Designed for a recurring `/memory-connect`
+  // task that drains the disconnected-memories queue on the user's cadence.
+  server.tool(
+    "memory_propose_connections",
+    `Surface zero-edge source memories with server-pre-filtered candidates for an LLM caller to classify.
+
+WORKFLOW (3 steps):
+  1. Call memory_propose_connections({ agentId: <your id>, limit: 50 }).
+     Response: { proposals: [{ source, candidates }], meta }.
+  2. For each proposal, inspect source.content + each candidate.content_snippet.
+     Decide which candidates are REAL connections to the source memory, and
+     pick a relationship from the vocabulary: influences, supports, contradicts,
+     related, learned-together, works_at, involves, located_at, part_of, about,
+     informed_by, uses, references. (suggested_relationship_hints is advisory.)
+  3. Commit via memory_connect_batch({ agentId, connections: [{ source_memory_id: source.id,
+     target_memory_id: candidate.id, relationship: <chosen> }, ...] }).
+     Skip proposals where you commit no edges — they will resurface in the next
+     run, which is fine.
+
+The server does NO LLM inference; your LLM classifies. Server selection: zero
+outgoing edges + 6h cooldown (gives write-time L1+L2a a chance to land first).
+Snippets are excluded as both source and candidate. Permission-restricted
+domains are excluded (count surfaced via meta.excluded_for_permissions).
+If meta.queue_saturated is true, the limit was hit and more memories likely
+need attention — schedule another run sooner than your normal cadence.`,
+    {
+      agentId: z.string().describe("Your agent ID (used for permission filtering on source memories)"),
+      // Cap at 50 (down from 500) per Sb-W4 in code-review round 1: 500 sources
+      // × 3 SQL queries each = 1500 concurrent libSQL queries, exceeding MCP
+      // tool timeouts. 50 matches the default + the recommended daily cadence;
+      // backpressure via meta.queue_saturated tells callers to schedule sooner.
+      limit: z.number().int().min(1).max(50).optional().describe("Max source memories to return per call (default 50, max 50)"),
+      minAgeHours: z.number().min(0).optional().describe("Minimum age of source memory in hours (default 6)"),
+      candidateLimit: z.number().int().min(1).max(50).optional().describe("Max candidates per source memory (default 10)"),
+      includeAlreadyConnected: z.boolean().optional().describe("Include memories that already have outgoing edges (default false)"),
+    },
+    async (params, extra) => {
+      const userId = getUserId(extra as Record<string, unknown>);
+      const sources = await selectSourceMemoriesForProposals(client, userId, {
+        limit: params.limit,
+        minAgeHours: params.minAgeHours,
+        includeAlreadyConnected: params.includeAlreadyConnected,
+      });
+
+      // Permission filter (Security F5 in plan-review round 2). Per-source
+      // checkPermission on read; rejected sources are excluded from the
+      // response. Surface the count so callers can see filtering is active.
+      let excluded = 0;
+      const allowedSources: typeof sources = [];
+      for (const s of sources) {
+        if (await checkPermission(params.agentId, s.domain, "read", userId)) {
+          allowedSources.push(s);
+        } else {
+          excluded++;
+        }
+      }
+
+      const candidateLimit = params.candidateLimit ?? 10;
+      const rawProposals = await Promise.all(
+        allowedSources.map(async (source) => ({
+          source,
+          candidates: await generateCandidatesForMemory(client, source, userId, { limit: candidateLimit }),
+        })),
+      );
+
+      // Sec-W2 in code-review round 1: filter candidates by domain read-permission
+      // so that a source memory in domain A doesn't leak content snippets from
+      // candidate memories in domain B (where the agent lacks read access),
+      // even if they share an entity_name. Cache permission results per domain.
+      const candidateDomainAllowed = new Map<string, boolean>();
+      for (const { candidates } of rawProposals) {
+        for (const c of candidates) {
+          if (!candidateDomainAllowed.has(c.domain)) {
+            candidateDomainAllowed.set(
+              c.domain,
+              await checkPermission(params.agentId, c.domain, "read", userId),
+            );
+          }
+        }
+      }
+      let candidatesExcluded = 0;
+      const proposals = rawProposals.map(({ source, candidates }) => {
+        const filtered = candidates.filter((c) => {
+          if (candidateDomainAllowed.get(c.domain)) return true;
+          candidatesExcluded++;
+          return false;
+        });
+        return { source, candidates: filtered };
+      });
+
+      const limit = params.limit ?? 50;
+      // Boolean backpressure signal — name + type now match (was a misnamed
+      // string sentinel: Nh-C2 in code-review round 1).
+      // Computed on POST-permission-filter set (allowedSources), not raw
+      // sources (Nh-F3 in code-review round 2): if all 50 sources were
+      // permission-restricted, raw `sources.length >= limit` would be true
+      // and the documented "schedule sooner" pseudo-code would busy-loop
+      // forever fetching the same restricted memories.
+      const queueSaturated = allowedSources.length >= limit;
+      return textResult({
+        proposals,
+        meta: {
+          excluded_for_permissions: excluded,
+          candidates_excluded_for_permissions: candidatesExcluded,
+          /** True when the per-call limit was hit. More memories likely need
+           *  attention — caller should schedule another run sooner. */
+          queue_saturated: queueSaturated,
+        },
+      });
+    },
+  );
+
+  // Wave 2.5: bulk-commit edges from an L3 task run. Per-edge user_id
+  // ownership check on BOTH source and target (Security F1 — CRITICAL,
+  // prevents cross-user graph poisoning). Idempotent via the unique edge
+  // index (added in the wave2_5_connection_indexes migration).
+  server.tool(
+    "memory_connect_batch",
+    `Commit multiple typed edges in one call. Use to land the output of step 3
+of the memory_propose_connections workflow — pass each (proposal.source.id,
+candidate.id, chosen relationship) triple as one connections[] entry.
+
+Security: per-edge user_id check on BOTH endpoints; cross-user attempts and
+nonexistent targets both return dropped[].reason='not_owned_or_missing' (these
+two are reported as one reason — the security check rejects either case).
+Permission check on source domain returns 'permission_denied'. Idempotent
+re-runs are safe — duplicates return 'duplicate' (no extra rows written; this
+depends on the unique edge index from the wave2_5_connection_indexes
+migration). Self-references return 'self_reference'.`,
+    {
+      agentId: z.string().describe("Your agent ID (for write permission check on each source domain)"),
+      connections: z.array(z.object({
+        source_memory_id: z.string(),
+        target_memory_id: z.string(),
+        relationship: z.enum(RELATIONSHIP_VALUES),
+      })).min(1).max(500).describe("Edges to commit (1-500 per call)"),
+    },
+    async (params, extra) => {
+      const userId = getUserId(extra as Record<string, unknown>);
+
+      // Permission pre-flight: filter out edges where the caller lacks write
+      // permission on the source memory's domain. Look up source domains in
+      // a single batched query to avoid N round-trips.
+      // Sec-N3 + Sb-N7 in code-review round 1: include deleted_at filter
+      // (don't permission-check against deleted memories' domains) AND
+      // unconditionally use `user_id IS ?` (handles NULL safely; no
+      // conditional clause that could leak a domain string from another
+      // user's memory in mixed-tenancy local DBs).
+      const sourceIds = Array.from(new Set(params.connections.map((c) => c.source_memory_id)));
+      const placeholders = sourceIds.map(() => "?").join(",");
+      const args: Array<string | null> = [...sourceIds, userId ?? null];
+      const sourceRows = (await client.execute({
+        sql: `SELECT id, domain FROM memories
+                WHERE id IN (${placeholders})
+                  AND user_id IS ?
+                  AND deleted_at IS NULL`,
+        args,
+      })).rows as unknown as Array<{ id: string; domain: string }>;
+      const sourceDomain = new Map<string, string>(sourceRows.map((r) => [r.id, r.domain]));
+
+      const permissionAllowed = new Map<string, boolean>();
+      for (const domain of new Set(sourceRows.map((r) => r.domain))) {
+        permissionAllowed.set(domain, await checkPermission(params.agentId, domain, "write", userId));
+      }
+
+      const allowed: ConnectBatchInput[] = [];
+      const droppedForPermission: ConnectBatchResult["dropped"] = [];
+      for (const c of params.connections) {
+        const dom = sourceDomain.get(c.source_memory_id);
+        if (dom === undefined) {
+          // Source not visible to caller (different user, or doesn't exist)
+          droppedForPermission.push({ ...c, reason: "not_owned_or_missing" });
+          continue;
+        }
+        if (!permissionAllowed.get(dom)) {
+          droppedForPermission.push({ ...c, reason: "permission_denied" });
+          continue;
+        }
+        allowed.push(c);
+      }
+
+      const result = await validateAndInsertConnectBatch(client, allowed, userId ?? null);
+      result.dropped.push(...droppedForPermission);
+
+      if (result.applied > 0) await bumpLastModified(client);
+      return textResult(result);
     },
   );
 

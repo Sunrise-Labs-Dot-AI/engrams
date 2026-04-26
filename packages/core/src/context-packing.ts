@@ -4,6 +4,7 @@ import { effectivePermanence } from "./confidence.js";
 import { getProfile } from "./entity-profiles.js";
 import { rerank } from "./reranker.js";
 import type { QueryExtractionMode } from "./query-extraction.js";
+import { applyPprPass, resolvePprConfig, type PprEdge } from "./ppr-rerank.js";
 
 // --- Token estimation ---
 
@@ -129,6 +130,27 @@ export interface ContextMeta {
   queryExtraction?: {
     mode: QueryExtractionMode;
     originalTokens: number;
+  };
+  /** Wave 2 — Personalized PageRank reranker post-pass telemetry.
+   *
+   *  Contract (Saboteur F9 in plan-review): `pprPass` is `undefined` when PPR
+   *  is disabled (kill switch or simply not opted in via LODIS_PPR_RERANK_ENABLED).
+   *  When PPR is enabled but fails (throws / NaN-guard / empty edges / timeout),
+   *  `pprPass` is present with `engaged: false` and a fixed `pprError` token.
+   *  Clients MUST use optional chaining (`meta.pprPass?.engaged === true`).
+   *
+   *  `edgeCount` and `candidatePoolSize` describe the caller's own user-scoped
+   *  graph (Security F2: not a new ACL surface; user_id-scoped at SQL level). */
+  pprPass?: {
+    engaged: boolean;
+    iterations: number;
+    converged: boolean;
+    candidatePoolSize: number;
+    edgeCount: number;
+    /** Fixed-token vocabulary (Security F6 in plan-review): never raw exception
+     *  text. One of: "ppr_timeout" | "ppr_graph_error" | "ppr_nan_guard" |
+     *  "ppr_reranker_disengaged" | "ppr_unknown". */
+    pprError?: string;
   };
 }
 
@@ -599,6 +621,43 @@ function packNarrativeRaw(
   };
 }
 
+// --- Wave 2 PPR helpers ---
+
+/**
+ * Fetch typed connections among the candidate pool. Closed-subgraph design:
+ * edges referencing IDs outside `candidateIds` are filtered server-side.
+ *
+ * SQL is unconditionally user_id-scoped (Security F3 in plan-review): the
+ * `user_id = ?` / `IS NULL` clause is enforced here regardless of whether
+ * upstream `hybridSearch` already user-scoped the candidate pool. Defense-in-
+ * depth — a future refactor that loosens hybridSearch scoping must not silently
+ * expose cross-user graph edges via this query.
+ */
+export async function fetchPprEdges(
+  client: Client,
+  candidateIds: string[],
+  userId: string | null,
+): Promise<PprEdge[]> {
+  if (candidateIds.length === 0) return [];
+  const placeholders = candidateIds.map(() => "?").join(",");
+  const userClause = userId ? `AND user_id = ?` : `AND user_id IS NULL`;
+  const sql = `
+    SELECT source_memory_id, target_memory_id, relationship
+    FROM memory_connections
+    WHERE source_memory_id IN (${placeholders})
+      AND target_memory_id IN (${placeholders})
+      ${userClause}
+  `;
+  const args: Array<string | number | null> = [...candidateIds, ...candidateIds];
+  if (userId) args.push(userId);
+  const result = await client.execute({ sql, args });
+  return result.rows.map((row) => ({
+    source: row.source_memory_id as string,
+    target: row.target_memory_id as string,
+    relationship: row.relationship as string,
+  }));
+}
+
 // --- Main entry point ---
 
 export async function contextSearch(
@@ -671,6 +730,16 @@ export async function contextSearch(
   // candidates regardless; topK only bounds how many come out. No extra
   // reranker latency. Env-configurable for experimentation/rollback.
   const rerankTopK = resolveRerankTopK();
+  // Wave 2 PPR config — resolves env flags (DISABLED wins). When enabled, the
+  // reranker is asked for the full candidate pool (not just top-K) so PPR has
+  // every node's logit available for the personalization vector. Otherwise PPR
+  // could only re-order within the top-K and could not rescue rank-188 cases
+  // like n7 Magda. See plan §Algorithm step 2.
+  const pprConfig = resolvePprConfig();
+  // When PPR is enabled, request the full pool from the reranker. Latency note:
+  // Modal MiniLM warm at 200 candidates ~9–11s per CLAUDE.md; existing
+  // LODIS_RERANKER_TIMEOUT_MS=30000 in production comfortably covers this.
+  const rerankRequestTopK = pprConfig.enabled ? results.length : rerankTopK;
   let reranked: ExpandedResult[];
   let rerankerEngaged: boolean | undefined;
   let rerankerError: string | undefined;
@@ -686,7 +755,7 @@ export async function contextSearch(
         id: r.memory.id as string,
         text: memoryRerankText(r),
       }));
-      const rerankResults = await rerank(query, candidates, { topK: rerankTopK });
+      const rerankResults = await rerank(query, candidates, { topK: rerankRequestTopK });
       const byId = new Map(results.map((r) => [r.memory.id as string, r]));
       reranked = rerankResults.flatMap((rr) => {
         const orig = byId.get(rr.id);
@@ -703,6 +772,96 @@ export async function contextSearch(
       process.stderr.write(`[lodis] reranker threw, falling back to RRF ordering: ${rerankerError}\n`);
       reranked = results;
     }
+  }
+
+  // Wave 2 — PPR reranker post-pass.
+  // Runs after rerank() and before permanenceMultiplier. Only engages when:
+  //   1. LODIS_PPR_RERANK_ENABLED=1 (and not LODIS_PPR_RERANK_DISABLED=1)
+  //   2. The reranker produced a valid ordering (rerankerEngaged === true).
+  //      If reranker fell back to RRF, PPR over RRF scores is meaningless.
+  //   3. There are candidates to operate on.
+  // Failure-mode contract (mirrors reranker block): try/catch, fixed-token
+  // pprError, fall back to pre-PPR ordering. NaN does not throw in JS — module
+  // includes inline NaN guards on personalization + blend (see ppr-rerank.ts).
+  let pprPass: ContextMeta["pprPass"] | undefined;
+  if (pprConfig.enabled && rerankerEngaged === true && reranked.length > 0) {
+    try {
+      const t0 = Date.now();
+      const pprCandidates = reranked.map((r) => ({
+        id: r.memory.id as string,
+        rerankScore: r.score,
+      }));
+      const candidateIds = pprCandidates.map((c) => c.id);
+      const edges = await fetchPprEdges(client, candidateIds, options.userId ?? null);
+      // Best-effort wall-clock cap: protects the SQL fetch (Saboteur F12 — the
+      // sync power-iteration loop is microseconds and cannot be preempted).
+      if (Date.now() - t0 > pprConfig.timeoutMs) {
+        throw new Error("ppr_timeout");
+      }
+      const result = applyPprPass(pprCandidates, edges);
+      const byId = new Map(reranked.map((r) => [r.memory.id as string, r]));
+      // Re-order `reranked` per PPR result, replacing score with the blended
+      // finalScore so downstream sort/pack steps work uniformly. Then trim to
+      // rerankTopK — a candidate that was past topK in the rerank-only path can
+      // now make it back in via PPR lift, which is the entire point.
+      reranked = result.ordered.flatMap((o) => {
+        const orig = byId.get(o.id);
+        return orig ? [{ ...orig, score: o.finalScore }] : [];
+      }).slice(0, rerankTopK);
+      pprPass = {
+        engaged: true,
+        iterations: result.meta.iterations,
+        converged: result.meta.converged,
+        candidatePoolSize: result.meta.candidatePoolSize,
+        edgeCount: result.meta.edgeCount,
+      };
+    } catch (err) {
+      const msg = String((err as Error)?.message ?? err);
+      // Fixed-token vocabulary (Security F6) — no raw exception text, no
+      // stack traces, no SQL fragments echoed to MCP clients.
+      const pprError =
+        msg === "ppr_timeout" ? "ppr_timeout"
+        : msg.includes("non-finite") ? "ppr_nan_guard"
+        : msg.toLowerCase().includes("sql") || msg.toLowerCase().includes("database") ? "ppr_graph_error"
+        : "ppr_unknown";
+      process.stderr.write(`[lodis] ppr threw, falling back to rerank ordering: ${pprError}\n`);
+      pprPass = {
+        engaged: false,
+        iterations: 0,
+        converged: false,
+        candidatePoolSize: reranked.length,
+        edgeCount: 0,
+        pprError,
+      };
+      // reranked is unchanged; fall through to permanenceMultiplier with
+      // pre-PPR ordering. But trim to rerankTopK now since the rerank request
+      // was made with topK = full pool.
+      if (reranked.length > rerankTopK) reranked = reranked.slice(0, rerankTopK);
+    }
+  } else if (pprConfig.enabled) {
+    // PPR was opted-in but couldn't run. Distinguish the two structural
+    // reasons (Sb-F17 in code-review round 2: previous fabrication labeled
+    // both as "ppr_graph_error" — operators saw misleading "graph error" in
+    // dashboards when the actual cause was reranker fallback to RRF).
+    let pprError: string;
+    if (rerankerEngaged !== true) {
+      pprError = "ppr_reranker_disengaged"; // PPR over RRF scores is meaningless
+    } else if (reranked.length === 0) {
+      pprError = "ppr_graph_error";  // empty candidate pool
+    } else {
+      pprError = "ppr_unknown";
+    }
+    pprPass = {
+      engaged: false,
+      iterations: 0,
+      converged: false,
+      candidatePoolSize: reranked.length,
+      edgeCount: 0,
+      pprError,
+    };
+    // Same trim defensive — when PPR is opted-in, the rerank request asked for
+    // the full pool; we still need to trim before downstream packing.
+    if (reranked.length > rerankTopK) reranked = reranked.slice(0, rerankTopK);
   }
 
   // Apply permanence-aware scoring
@@ -747,6 +906,7 @@ export async function contextSearch(
         rerankerEngaged,
         ...(rerankerError ? { rerankerError } : {}),
         queryExtraction: { mode: extraction.mode, originalTokens: extraction.originalTokens },
+        ...(pprPass ? { pprPass } : {}),
       },
     };
   }
@@ -799,6 +959,7 @@ export async function contextSearch(
       rerankerEngaged,
       ...(rerankerError ? { rerankerError } : {}),
       queryExtraction: { mode: extraction.mode, originalTokens: extraction.originalTokens },
+      ...(pprPass ? { pprPass } : {}),
     },
   };
 }
