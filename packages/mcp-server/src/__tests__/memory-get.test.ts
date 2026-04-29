@@ -20,8 +20,8 @@ interface GetResponse {
   memories?: Array<{ id: string; domain: string; content: string; url?: string; permanence?: string | null }>;
   count?: number;
   requested?: number;
+  deduplicated?: number;
   not_found?: string[];
-  totalConnected?: number;
   error?: string;
 }
 
@@ -163,6 +163,7 @@ describe("memory_get", () => {
 
         expect(res.count).toBe(1);
         expect(res.requested).toBe(1);
+        expect(res.deduplicated).toBe(3);
         expect(res.not_found).toEqual([]);
 
         const after = (await db.execute({ sql: `SELECT used_count FROM memories WHERE id = ?`, args: [id] })).rows[0] as { used_count: number };
@@ -285,6 +286,13 @@ describe("memory_get", () => {
       const ids = Array.from({ length: 51 }, () => memId());
       const res = parseResult(await mcp.callTool({ name: "memory_get", arguments: { ids } }));
       expect(res.error).toContain("at most 50");
+    });
+  });
+
+  it("rejects empty ids array with the same error as missing fields", async () => {
+    await withServer(dbPath, async (mcp) => {
+      const res = parseResult(await mcp.callTool({ name: "memory_get", arguments: { ids: [] } }));
+      expect(res.error).toContain("requires either `id` or `ids`");
     });
   });
 });

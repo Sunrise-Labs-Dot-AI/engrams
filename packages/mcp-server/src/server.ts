@@ -3207,29 +3207,20 @@ migration). Self-references return 'self_reference'.`,
       const extraRec = extra as Record<string, unknown>;
       const userId = getUserId(extraRec);
 
-      // Hosted-mode safety: if the request carries an authInfo envelope but we
-      // could not resolve a userId from it, treat it as an auth failure and
-      // return an empty result — never fall through to a userId-less query
-      // (which on a multi-tenant deployment would be a cross-tenant read).
-      // Local stdio mode has no authInfo at all and is allowed to proceed
-      // without a userId.
-      const hasAuthEnvelope = extraRec && typeof extraRec.authInfo !== "undefined" && extraRec.authInfo !== null;
-      if (hasAuthEnvelope && !userId) {
-        return textResult({ memories: [], count: 0, requested: 0, not_found: [], totalConnected: 0 });
-      }
-
-      // Collect + dedup the requested IDs.
-      if (!params.id && !params.ids) {
+      // --- Input validation (runs BEFORE the hosted-mode auth gate so that
+      // a malformed request surfaces a useful error, and an auth failure on a
+      // well-formed request returns an honest response shape that names the
+      // IDs the caller asked for in `not_found`). ---
+      const hasIdField = typeof params.id === "string" && params.id.length > 0;
+      const hasIdsField = Array.isArray(params.ids) && params.ids.length > 0;
+      if (!hasIdField && !hasIdsField) {
         return textResult({ error: "memory_get requires either `id` or `ids`" });
       }
-      if (params.id && params.ids) {
+      if (hasIdField && hasIdsField) {
         return textResult({ error: "memory_get accepts either `id` or `ids`, not both" });
       }
-      const rawIds = params.id ? [params.id] : (params.ids ?? []);
+      const rawIds = hasIdField ? [params.id as string] : (params.ids ?? []);
       const dedupedIds = [...new Set(rawIds)];
-      if (dedupedIds.length === 0) {
-        return textResult({ error: "memory_get requires at least one ID" });
-      }
       if (dedupedIds.length > 50) {
         return textResult({ error: `memory_get accepts at most 50 IDs after dedup, got ${dedupedIds.length}` });
       }
@@ -3241,6 +3232,24 @@ migration). Self-references return 'self_reference'.`,
       const invalid = dedupedIds.filter((id) => !ID_RE.test(id));
       if (invalid.length > 0) {
         return textResult({ error: `Invalid memory ID(s) — must be 32-char lowercase hex: ${invalid.slice(0, 5).join(", ")}${invalid.length > 5 ? "…" : ""}` });
+      }
+
+      // Hosted-mode safety: if the request carries an authInfo envelope but we
+      // could not resolve a userId from it, treat it as an auth failure and
+      // return an empty result — never fall through to a userId-less query
+      // (which on a multi-tenant deployment would be a cross-tenant read).
+      // Local stdio mode has no authInfo at all and is allowed to proceed
+      // without a userId. The response shape is identical to "all IDs not
+      // found" so the caller cannot distinguish auth failure from typos.
+      const hasAuthEnvelope = extraRec && typeof extraRec.authInfo !== "undefined" && extraRec.authInfo !== null;
+      if (hasAuthEnvelope && !userId) {
+        return textResult({
+          memories: [],
+          count: 0,
+          requested: dedupedIds.length,
+          deduplicated: rawIds.length - dedupedIds.length,
+          not_found: dedupedIds,
+        });
       }
 
       await maybeRunDecay(userId);
@@ -3290,8 +3299,8 @@ migration). Self-references return 'self_reference'.`,
         memories: visible.map((r) => withUrl(r as unknown as { id: string })),
         count: visible.length,
         requested: dedupedIds.length,
+        deduplicated: rawIds.length - dedupedIds.length,
         not_found: notFound,
-        totalConnected: 0,
       });
     },
   );
