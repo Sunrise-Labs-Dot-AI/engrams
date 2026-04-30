@@ -150,11 +150,12 @@ Rate-limit: 500 writes per `(source_agent_id, life_domain)` per hour, unconditio
 
 By design, generic `memory_write` does **not** consult the `domains` registry and does **not** lowercase the `domain` param. This means an agent writing `domain: "Fitness"` via generic `memory_write` is stored as an **orphan** (unregistered) row, distinct from the registered `fitness`. `memory_list_domains` surfaces this drift with `registered: false`. Only `memory_write_snippet` enforces the registry.
 
-## MCP Tools (34)
+## MCP Tools (35)
 
 | Tool | Description |
 |------|-------------|
 | `memory_search` | Hybrid semantic + keyword search with domain/confidence/entity filters |
+| `memory_get` | Direct fetch by 32-char hex ID (single or batch up to 50, deduplicated). Returns full record contents — including PII — only for rows the caller's user_id and agent ACL allow. Non-returnable cases (missing / cross-tenant / blocked / archived / soft-deleted) collapse into a single opaque `not_found` array to prevent existence oracling. Auto-tracks usage only on returned rows. For graph traversal use `memory_get_connections`. |
 | `memory_context` | Token-budget-aware context search (hierarchical or narrative output); returns `retrievalId` + saturation + suggested follow-ups for the feedback loop |
 | `memory_rate_context` | Close the loop on a prior `memory_context` retrieval — reports `referenced` (cited) and `noise` (filtered) IDs; drives the +0.02 used-bump and optional utility ranking |
 | `memory_briefing` | Pre-computed entity profile summaries with 24h cache |
